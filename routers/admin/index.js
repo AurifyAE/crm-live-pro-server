@@ -13,7 +13,8 @@ import {
   updateUserProfile
 } from "../../controllers/admin/accountControllers.js";
 import {loginAdmin} from '../../controllers/superAdmin/adminControllers.js'
-import { createTrade, getUserTrades, updateTrade } from "../../controllers/admin/tradingController.js";
+import { createTrade, getUserTrades, updateTrade,getLPTrades , getUserOrdersByAdmin } from "../../controllers/admin/tradingController.js";
+import { createTransaction, getAllTransactions ,getUserTransactionsByAdmin} from "../../controllers/admin/transactionController.js";
 const router = express.Router();
 router.post("/login", loginAdmin);
 router.get("/fetch-data/:adminId", getAllData);
@@ -30,5 +31,11 @@ router.delete('/accounts/:ACCODE/:adminId', deleteAccount);
 //order management 
 router.post('/create-order/:adminId', createTrade);
 router.get('/order/:adminId', getUserTrades);
+router.get('/lp-order/:adminId', getLPTrades);
 router.patch('/order/:adminId/:orderId',updateTrade);
+router.get('/user-orders/:adminId/:userId', getUserOrdersByAdmin);
+//transaction management 
+router.post('/create-transaction/:adminId', createTransaction);
+router.get('/fetch-transaction', getAllTransactions);
+router.get('/user-transactions/:adminId/:userId', getUserTransactionsByAdmin);
 export default router;
