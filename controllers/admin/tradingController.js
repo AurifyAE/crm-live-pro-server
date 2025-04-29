@@ -35,6 +35,39 @@ export const getUserTrades = async (req, res, next) => {
     next(error);
   }
 };
+export const getUserOrdersByAdmin = async (req, res, next) => {
+  try {
+    const { adminId, userId } = req.params;
+    
+    const orders = await tradingServices.getOrdersByUser(adminId, userId);
+    
+    res.json({
+      status: 200,
+      success: true,
+      message: "User orders retrieved successfully",
+      data: orders
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getLPTrades = async (req, res, next) => {
+  try {
+    const { adminId } = req.params;
+    
+    const trades = await tradingServices.getTradesByLP(adminId);
+    
+    res.json({
+      status: 200,
+      success: true,
+      message: "LP trades retrieved successfully",
+      data: trades
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 export const getTrade = async (req, res, next) => {
   try {
