@@ -2,14 +2,11 @@ import mongoose from "mongoose";
 
 const OrderSchema = new mongoose.Schema(
   {
-    // Order identification
     orderNo: {
       type: String,
       unique: true,
       required: true,
     },
-    
-    // Trade details
     type: {
       type: String,
       enum: ["BUY", "SELL"],
@@ -24,8 +21,11 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    
-    // Pricing information
+    requiredMargin: {
+      type: Number,
+      default: 0,
+      required: true,
+    },
     price: {
       type: Number,
       required: true,
@@ -46,8 +46,6 @@ const OrderSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    
-    // Timing information
     time: {
       type: Date,
       default: Date.now,
@@ -60,8 +58,6 @@ const OrderSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    
-    // Status and outcome
     orderStatus: {
       type: String,
       enum: ["PROCESSING", "EXECUTED", "CANCELLED", "CLOSED", "PENDING"],
@@ -71,8 +67,6 @@ const OrderSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    
-    // User references
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Account",
@@ -83,15 +77,11 @@ const OrderSchema = new mongoose.Schema(
       ref: "Admin",
       required: true,
     },
-    
-    // LP relationship - new fields
     lpPositionId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LPPosition",
       default: null,
     },
-    
-    // Additional info
     comment: {
       type: String,
       default: "",
