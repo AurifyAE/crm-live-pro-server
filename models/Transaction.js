@@ -7,7 +7,6 @@ const TransactionSchema = new mongoose.Schema(
       unique: true,
       required: true,
     },
-
     type: {
       type: String,
       enum: ["DEPOSIT", "WITHDRAWAL"],
@@ -22,22 +21,23 @@ const TransactionSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-
     status: {
       type: String,
       enum: ["PENDING", "COMPLETED", "FAILED", "CANCELLED"],
       default: "PENDING",
     },
-
+    entityType: {
+      type: String,
+      required: true,
+    },
     date: {
       type: Date,
       default: Date.now,
     },
-
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Account",
-      required: true,
+      default: null,
     },
     adminId: {
       type: mongoose.Schema.Types.ObjectId,

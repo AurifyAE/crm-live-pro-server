@@ -58,8 +58,8 @@ export const loginAdmin = async (req, res, next) => {
 
 export const getAdminProfile = async (req, res, next) => {
   try {
-    // Assuming middleware puts admin ID in req.adminId
-    const admin = await adminServices.getAdminById(req.adminId);
+    const { adminId } = req.params;
+    const admin = await adminServices.getAdminById(adminId);
     
     res.status(200).json({
       success: true,
