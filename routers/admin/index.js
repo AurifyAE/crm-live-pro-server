@@ -11,6 +11,7 @@ import {
   deleteAccount,
   getUserProfile,
   updateUserProfile,
+  adminTokenVerificationApi
 } from "../../controllers/admin/accountControllers.js";
 import { getAdminProfile, loginAdmin } from "../../controllers/superAdmin/adminControllers.js";
 import {
@@ -29,6 +30,7 @@ import {
 const router = express.Router();
 router.post("/login", loginAdmin);
 router.get("/fetch-data/:adminId", getAllData);
+router.post("/verify-token", adminTokenVerificationApi);
 router.get("/user-profile/:adminId/:userId", getUserProfile);
 router.put("/user-profile/:adminId/:userId", updateUserProfile);
 router.put("/update-accountType/:adminId", updateAccountType);
