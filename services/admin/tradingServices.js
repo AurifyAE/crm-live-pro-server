@@ -11,19 +11,18 @@ const generateEntryId = (prefix) => {
   return `${prefix}-${timestamp.substring(timestamp.length - 5)}-${randomStr}`;
 };
 
-const TROY_OUNCE_GRAMS = 31.1035;
-const GOLD_CONVERSION_FACTOR = 3.67;
+const TROY_OUNCE_GRAMS = 31.103;
+const GOLD_CONVERSION_FACTOR = 3.674;
+const TTB_FACTOR = 116.64;
 
 export const createTrade = async (adminId, userId, tradeData) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-
   try {
     const userAccount = await Account.findById(userId).session(session);
     if (!userAccount) {
       throw new Error("User account not found");
     }
-
     const currentCashBalance = userAccount.AMOUNTFC;
     const currentMetalBalance = userAccount.METAL_WT;
     const currentPrice = parseFloat(tradeData.price);
@@ -31,10 +30,20 @@ export const createTrade = async (adminId, userId, tradeData) => {
     const userSpread = parseFloat(tradeData.userSpread || 0);
 
     const clientOrderPrice = currentPrice + userSpread / 2;
+
+    // Apply the TTB conversion factor for both client and LP prices
     const goldWeightValue =
-      (clientOrderPrice / TROY_OUNCE_GRAMS) * GOLD_CONVERSION_FACTOR * volume;
+      (clientOrderPrice / TROY_OUNCE_GRAMS) *
+      GOLD_CONVERSION_FACTOR *
+      TTB_FACTOR *
+      volume;
+
     const lpCurrentPrice =
-      (currentPrice / TROY_OUNCE_GRAMS) * GOLD_CONVERSION_FACTOR * volume;
+      (currentPrice / TROY_OUNCE_GRAMS) *
+      GOLD_CONVERSION_FACTOR *
+      TTB_FACTOR *
+      volume;
+
     const newOrder = new Order({
       ...tradeData,
       profit: 0,
@@ -60,13 +69,16 @@ export const createTrade = async (adminId, userId, tradeData) => {
     });
     const savedLPPosition = await lpPosition.save({ session });
 
+    // Calculate new cash balance after deducting the converted gold weight value
     const newCashBalance = currentCashBalance - goldWeightValue;
 
-    let newMetalBalance = currentMetalBalance + tradeData.volume;
+    // Update metal balance based on order type
+    let newMetalBalance = currentMetalBalance;
     if (tradeData.type === "BUY") {
       newMetalBalance = currentMetalBalance + tradeData.volume;
     } else if (tradeData.type === "SELL") {
-      // Check if user has sufficient metal balance for SELL order
+      // For SELL orders, subtract from metal balance
+      // Note: Commented out balance check
       // if (currentMetalBalance < tradeData.volume) {
       //   throw new Error("Insufficient gold balance for SELL order");
       // }
@@ -83,14 +95,20 @@ export const createTrade = async (adminId, userId, tradeData) => {
       { session, new: true }
     );
 
-    // 7. Create ledger entries
+    // Create ledger entries
 
     // ORDER ledger entry (margin deduction)
     const orderLedgerEntry = new Ledger({
       entryId: generateEntryId("ORD"),
       entryType: "ORDER",
       referenceNumber: tradeData.orderNo,
-      description: `Margin for ${tradeData.type} ${tradeData.volume} ${tradeData.symbol} @ ${clientOrderPrice}`, // Use client price with spread
+      description: `Margin for ${tradeData.type} ${tradeData.volume} ${
+        tradeData.symbol
+      } @ ${clientOrderPrice} (AED ${(
+        (clientOrderPrice / TROY_OUNCE_GRAMS) *
+        GOLD_CONVERSION_FACTOR *
+        TTB_FACTOR
+      ).toFixed(2)})`,
       amount: goldWeightValue.toFixed(2),
       entryNature: "DEBIT", // Debit because margin is being taken from the account
       runningBalance: newCashBalance.toFixed(2),
@@ -98,7 +116,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
         type: tradeData.type,
         symbol: tradeData.symbol,
         volume: tradeData.volume,
-        entryPrice: clientOrderPrice, // Use client price with spread
+        entryPrice: clientOrderPrice,
         profit: 0,
         status: "PROCESSING",
       },
@@ -113,16 +131,22 @@ export const createTrade = async (adminId, userId, tradeData) => {
       entryId: generateEntryId("LP"),
       entryType: "LP_POSITION",
       referenceNumber: tradeData.orderNo,
-      description: `LP Position opened for ${tradeData.type} ${tradeData.volume} ${tradeData.symbol} @ ${currentPrice}`, // Use original price without spread
-      amount: lpCurrentPrice.toFixed(2), // Same amount as the margin
+      description: `LP Position opened for ${tradeData.type} ${
+        tradeData.volume
+      } ${tradeData.symbol} @ ${currentPrice} (AED ${(
+        (currentPrice / TROY_OUNCE_GRAMS) *
+        GOLD_CONVERSION_FACTOR *
+        TTB_FACTOR
+      ).toFixed(2)})`,
+      amount: lpCurrentPrice.toFixed(2),
       entryNature: "CREDIT", // Credit to the LP's perspective
-      runningBalance: newCashBalance.toFixed(2), // Same running balance as the order entry
+      runningBalance: newCashBalance.toFixed(2),
       lpDetails: {
         positionId: tradeData.orderNo,
         type: tradeData.type,
         symbol: tradeData.symbol,
         volume: tradeData.volume,
-        entryPrice: currentPrice, // Use original price without spread
+        entryPrice: currentPrice,
         profit: 0,
         status: "OPEN",
       },
@@ -162,7 +186,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
         tradeData.type === "BUY" ? "credit" : "debit"
       } for trade ${tradeData.orderNo}`,
       amount: tradeData.volume,
-      entryNature: "CREDIT", // Credit for BUY, Debit for SELL
+      entryNature: tradeData.type === "BUY" ? "CREDIT" : "DEBIT", // CREDIT for BUY, DEBIT for SELL
       runningBalance: newMetalBalance.toFixed(2),
       transactionDetails: {
         type: null, // Not a deposit or withdrawal
@@ -172,9 +196,11 @@ export const createTrade = async (adminId, userId, tradeData) => {
       user: userId,
       adminId: adminId,
       date: new Date(tradeData.openingDate),
-      notes: `Gold weight (${goldWeightValue.toFixed(5)}) ${
+      notes: `Gold weight (${tradeData.volume}) ${
         tradeData.type === "BUY" ? "added to" : "subtracted from"
-      } account for ${tradeData.type} order`,
+      } account for ${
+        tradeData.type
+      } order (Value: AED ${goldWeightValue.toFixed(2)})`,
     });
     await goldTransactionLedgerEntry.save({ session });
 
@@ -190,6 +216,18 @@ export const createTrade = async (adminId, userId, tradeData) => {
         gold: newMetalBalance,
       },
       goldWeightValue,
+      convertedPrice: {
+        client: (
+          (clientOrderPrice / TROY_OUNCE_GRAMS) *
+          GOLD_CONVERSION_FACTOR *
+          TTB_FACTOR
+        ).toFixed(2),
+        lp: (
+          (currentPrice / TROY_OUNCE_GRAMS) *
+          GOLD_CONVERSION_FACTOR *
+          TTB_FACTOR
+        ).toFixed(2),
+      },
       ledgerEntries: {
         order: orderLedgerEntry,
         lp: lpLedgerEntry,
@@ -323,21 +361,23 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
       sanitizedData.closingPrice = clientClosingPrice.toString();
     }
 
-    // Constants for gold conversion
-    const TROY_OUNCE_GRAMS = 31.1035;
-    const GOLD_CONVERSION_FACTOR = 3.67; // The conversion factor for gold
-
     // Calculate gold weight values for entry and closing prices
     const entryPrice = parseFloat(order.openingPrice);
     const volume = parseFloat(order.volume);
 
     // Calculate original gold weight value (at entry)
     const entryGoldWeightValue =
-      (entryPrice / TROY_OUNCE_GRAMS) * GOLD_CONVERSION_FACTOR * volume;
+      (entryPrice / TROY_OUNCE_GRAMS) *
+      GOLD_CONVERSION_FACTOR *
+      TTB_FACTOR *
+      volume;
 
     // Calculate closing gold weight value
     const closingGoldWeightValue =
-      (currentPrice / TROY_OUNCE_GRAMS) * GOLD_CONVERSION_FACTOR * volume;
+      (currentPrice / TROY_OUNCE_GRAMS) *
+      GOLD_CONVERSION_FACTOR *
+      TTB_FACTOR *
+      volume;
 
     // Calculate profit in gold weight value
     let profitValue;
