@@ -24,6 +24,19 @@ const adminSchema = new mongoose.Schema(
       type: String, 
       required: true 
     },
+    // Added balance fields
+    cashBalance: {
+      type: Number,
+      default: 0
+    },
+    goldBalance: {
+      type: Number,
+      default: 0
+    },
+    margin: {
+      type: Number,
+      default: 0
+    },
     features: [
       {
         name: { 

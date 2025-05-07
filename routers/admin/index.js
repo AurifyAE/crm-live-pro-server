@@ -1,5 +1,5 @@
 import express from "express";
-import { 
+import {
   getAllData,
   updateAccountType,
   getAccountByType,
@@ -10,10 +10,22 @@ import {
   updateAccount,
   deleteAccount,
   getUserProfile,
-  updateUserProfile
+  updateUserProfile,
 } from "../../controllers/admin/accountControllers.js";
-import {loginAdmin} from '../../controllers/superAdmin/adminControllers.js'
-import { createTrade, getUserTrades, updateTrade } from "../../controllers/admin/tradingController.js";
+import { getAdminProfile, loginAdmin } from "../../controllers/superAdmin/adminControllers.js";
+import {
+  createTrade,
+  getUserTrades,
+  updateTrade,
+  getLPTrades,
+  getUserOrdersByAdmin,
+} from "../../controllers/admin/tradingController.js";
+import {
+  createTransaction,
+  getAllTransactions,
+  getUserTransactionsByAdmin,
+  getLedgerData,
+} from "../../controllers/admin/transactionController.js";
 const router = express.Router();
 router.post("/login", loginAdmin);
 router.get("/fetch-data/:adminId", getAllData);
@@ -21,14 +33,25 @@ router.get("/user-profile/:adminId/:userId", getUserProfile);
 router.put("/user-profile/:adminId/:userId", updateUserProfile);
 router.put("/update-accountType/:adminId", updateAccountType);
 router.get("/account-type", getAccountByType);
-router.put('/update-margin/:adminId', updateMarginAmount);
-router.put('/update-favorite/:adminId', updateFavoriteStatus);
-router.get('/fetch-filter', filterAccounts);
-router.post('/accounts/:adminId', insertAccount);
-router.put('/accounts/:ACCODE/:adminId', updateAccount);
-router.delete('/accounts/:ACCODE/:adminId', deleteAccount);
-//order management 
-router.post('/create-order/:adminId', createTrade);
-router.get('/order/:adminId', getUserTrades);
-router.patch('/order/:adminId/:orderId',updateTrade);
+router.put("/update-margin/:adminId", updateMarginAmount);
+router.put("/update-favorite/:adminId", updateFavoriteStatus);
+router.get("/fetch-filter", filterAccounts);
+router.post("/accounts/:adminId", insertAccount);
+router.put("/accounts/:ACCODE/:adminId", updateAccount);
+router.delete("/accounts/:ACCODE/:adminId", deleteAccount);
+router.get("/profile/:adminId", getAdminProfile);
+
+//order management
+router.post("/create-order/:adminId", createTrade);
+router.get("/order/:adminId", getUserTrades);
+router.get("/lp-order/:adminId", getLPTrades);
+router.patch("/order/:adminId/:orderId", updateTrade);
+router.get("/user-orders/:adminId/:userId", getUserOrdersByAdmin);
+//transaction management
+router.post("/create-transaction/:adminId", createTransaction);
+router.get("/fetch-transaction", getAllTransactions);
+router.get("/user-transactions/:adminId/:userId", getUserTransactionsByAdmin);
+//ledger management
+router.get("/fetch-ledger", getLedgerData);
+
 export default router;

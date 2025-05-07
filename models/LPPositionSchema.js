@@ -7,7 +7,6 @@ const LPPositionSchema = new mongoose.Schema(
       unique: true,
       required: true,
     },
-
     type: {
       type: String,
       enum: ["BUY", "SELL"],
@@ -22,7 +21,6 @@ const LPPositionSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-
     entryPrice: {
       type: Number,
       required: true,
@@ -43,7 +41,6 @@ const LPPositionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-
     status: {
       type: String,
       enum: ["OPEN", "CLOSED", "PARTIALLY_CLOSED"],
@@ -53,12 +50,15 @@ const LPPositionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-
     clientOrders: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
     },
-
+    adminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      required: true,
+    },
     externalReference: {
       type: String,
       default: null,
@@ -72,5 +72,4 @@ const LPPositionSchema = new mongoose.Schema(
 );
 
 const LPPosition = mongoose.model("LPPosition", LPPositionSchema);
-
 export default LPPosition;
