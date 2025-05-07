@@ -15,8 +15,13 @@ app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' })); // Increase JSON payload limit
 app.use(express.urlencoded({ limit: '50mb', extended: true })); // Increase URL-encoded payload limit
 
-// Custom middleware to check for secret key
+// Custom middleware to check for secret key - moved after CORS
 const checkSecretKey = (req, res, next) => {
+  // Skip secret key check for preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+  
   const secretKey = req.headers["x-secret-key"];
   if (secretKey !== process.env.API_KEY) {
     return res.status(403).json({ error: "Unauthorized" });
@@ -24,21 +29,21 @@ const checkSecretKey = (req, res, next) => {
   next();
 };
 
-// CORS configuration
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      callback(null, true); // Allow any origin
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    credentials: true,
-  })
-);
+// CORS configuration - BEFORE other middleware
+const corsOptions = {
+  origin: ['https://crm-live-pro.onrender.com'], // Allow your frontend domains
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ['Content-Type', 'x-secret-key', 'Authorization'],
+  credentials: true,
+};
 
-// Apply secret key check to all routes
+// Apply CORS first
+app.use(cors(corsOptions));
+
+// Then apply secret key check
 app.use(checkSecretKey);
 
-//database connecting
+// Database connecting
 mongodb();
 
 // Routes
