@@ -725,9 +725,13 @@ export const handleWhatsAppWebhook = async (req, res) => {
     if (!authResult.isAuthorized) {
       console.log("Unauthorized user attempted to access:", From);
       const responseMessage =
-        "Sorry, your number is not registered with our service. Please contact support for assistance.";
+        `🚫 *Access Denied*\n\n` +
+        `Your number is not registered with our service.\n` +
+        `Please contact our support team for quick assistance:\n\n` +
+        `📞 *Ajmal TK* – Aurify Technologies\n` +
+        `📱 +971 58 502 3411\n\n` +
+        `We’re here to help you! 💬`;
 
-      // Send response via TwiML to handle the unauthorized user
       const twiml = new pkg.twiml.MessagingResponse();
       twiml.message(responseMessage);
 
