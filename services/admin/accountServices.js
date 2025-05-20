@@ -194,7 +194,7 @@ export const updateUserById = async (adminId, userId, updateData) => {
     // Sanitize the update data to prevent modifying restricted fields
     const allowedUpdates = [
       'lastName','firstName', 'email', 'phoneNumber', 'address', 
-      'accountStatus', 'kycStatus', 'userSpread'
+      'accountStatus', 'kycStatus', 'bidSpread','askSpread'
     ];
     
     const sanitizedData = {};

@@ -27,9 +27,16 @@ export const createTrade = async (adminId, userId, tradeData) => {
     const currentMetalBalance = userAccount.METAL_WT;
     const currentPrice = parseFloat(tradeData.price);
     const volume = parseFloat(tradeData.volume);
-    const userSpread = parseFloat(tradeData.userSpread || 0);
-
-    const clientOrderPrice = currentPrice + userSpread / 2;
+    
+    // Use askSpread or bidSpread from user account based on order type
+    let clientOrderPrice;
+    if (tradeData.type === "BUY") {
+      // For BUY orders, add askSpread to the current price
+      clientOrderPrice = currentPrice + userAccount.askSpread;
+    } else {
+      // For SELL orders, subtract bidSpread from the current price
+      clientOrderPrice = currentPrice - userAccount.bidSpread;
+    }
 
     // Apply the TTB conversion factor for both client and LP prices
     const goldWeightValue =
@@ -50,7 +57,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
       user: userId,
       adminId: adminId,
       orderStatus: "PROCESSING",
-      openingPrice: clientOrderPrice.toString(),
+      openingPrice: clientOrderPrice.toFixed(2),
     });
     const savedOrder = await newOrder.save({ session });
 
@@ -69,8 +76,9 @@ export const createTrade = async (adminId, userId, tradeData) => {
     });
     const savedLPPosition = await lpPosition.save({ session });
 
-    // Calculate new cash balance after deducting the converted gold weight value
-    const newCashBalance = currentCashBalance - goldWeightValue;
+    // Use tradeData.requiredMargin instead of goldWeightValue to update the user's cash balance
+    const requiredMargin = parseFloat(tradeData.requiredMargin || 0);
+    const newCashBalance = currentCashBalance - requiredMargin;
 
     // Update metal balance based on order type
     let newMetalBalance = currentMetalBalance;
@@ -109,7 +117,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
         GOLD_CONVERSION_FACTOR *
         TTB_FACTOR
       ).toFixed(2)})`,
-      amount: goldWeightValue.toFixed(2),
+      amount: requiredMargin.toFixed(2),
       entryNature: "DEBIT", // Debit because margin is being taken from the account
       runningBalance: newCashBalance.toFixed(2),
       orderDetails: {
@@ -162,7 +170,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
       entryType: "TRANSACTION",
       referenceNumber: tradeData.orderNo,
       description: `Margin allocation for trade ${tradeData.orderNo}`,
-      amount: goldWeightValue.toFixed(2),
+      amount: requiredMargin.toFixed(2),
       entryNature: "DEBIT", // Debit from user cash account
       runningBalance: newCashBalance.toFixed(2),
       transactionDetails: {
@@ -200,7 +208,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
         tradeData.type === "BUY" ? "added to" : "subtracted from"
       } account for ${
         tradeData.type
-      } order (Value: AED ${goldWeightValue.toFixed(2)})`,
+      } order (Value: AED ${requiredMargin.toFixed(2)})`,
     });
     await goldTransactionLedgerEntry.save({ session });
 
@@ -215,6 +223,7 @@ export const createTrade = async (adminId, userId, tradeData) => {
         cash: newCashBalance,
         gold: newMetalBalance,
       },
+      requiredMargin,
       goldWeightValue,
       convertedPrice: {
         client: (
@@ -305,6 +314,8 @@ export const getTradeById = async (adminId, tradeId) => {
 export const updateTradeStatus = async (adminId, orderId, updateData) => {
   const session = await mongoose.startSession();
   session.startTransaction();
+  
+  let committed = false; // Flag to track if transaction was committed
 
   try {
     // Sanitize the update data to prevent modifying restricted fields
@@ -348,13 +359,17 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
       throw new Error("User account not found");
     }
 
-    // Get the user spread from the order
-    const userSpread = parseFloat(userAccount.userSpread || 0);
-
     const currentPrice = parseFloat(sanitizedData.closingPrice || order.price);
 
-    // Calculate client order closing price with spread adjustment
-    const clientClosingPrice = currentPrice - userSpread / 2;
+    // Calculate client order closing price with appropriate spread adjustment
+    let clientClosingPrice;
+    if (order.type === "BUY") {
+      // For BUY orders that are closing, we subtract the bidSpread (selling back)
+      clientClosingPrice = currentPrice - userAccount.bidSpread;
+    } else {
+      // For SELL orders that are closing, we add the askSpread (buying back)
+      clientClosingPrice = currentPrice + userAccount.askSpread;
+    }
 
     // If we're closing the order, adjust the closing price for client
     if (sanitizedData.orderStatus === "CLOSED") {
@@ -387,6 +402,7 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
       // SELL
       profitValue = entryGoldWeightValue - closingGoldWeightValue;
     }
+    
     let clientProfit;
     if (order.type === "BUY") {
       clientProfit = (clientClosingPrice - entryPrice) * volume;
@@ -394,6 +410,11 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
       // SELL
       clientProfit = (entryPrice - clientClosingPrice) * volume;
     }
+    
+    // Initialize the newCashBalance and newMetalBalance variables
+    let newCashBalance = userAccount.AMOUNTFC;
+    let newMetalBalance = userAccount.METAL_WT;
+    
     // Update current balances
     const currentCashBalance = userAccount.AMOUNTFC;
     const currentMetalBalance = userAccount.METAL_WT;
@@ -405,7 +426,7 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
 
     // If closing, set proper profit value
     if (sanitizedData.orderStatus === "CLOSED") {
-      order.profit = clientProfit.toFixed(2);
+      order.profit = profitValue.toFixed(2);
     }
 
     await order.save({ session });
@@ -428,8 +449,47 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
 
       if (sanitizedData.orderStatus === "CLOSED") {
         lpPosition.status = "CLOSED";
-        // LP profit is the user spread * volume
-        lpPosition.profit = (userSpread * volume).toString();
+        
+        // UPDATED LP PROFIT CALCULATION
+        // Get the LP entry price 
+        const lpEntryPrice = parseFloat(lpPosition.entryPrice);
+        
+        // Calculate order opening gold weight value
+        const orderOpeningGoldWeightValue = 
+          (entryPrice / TROY_OUNCE_GRAMS) * 
+          GOLD_CONVERSION_FACTOR * 
+          TTB_FACTOR * 
+          volume;
+          
+        // Calculate LP entry gold weight value
+        const lpEntryGoldWeightValue = 
+          (lpEntryPrice / TROY_OUNCE_GRAMS) * 
+          GOLD_CONVERSION_FACTOR * 
+          TTB_FACTOR * 
+          volume;
+        
+        // Calculate order closing gold weight value using client closing price
+        const orderClosingGoldWeightValue = 
+          (clientClosingPrice / TROY_OUNCE_GRAMS) * 
+          GOLD_CONVERSION_FACTOR * 
+          TTB_FACTOR * 
+          volume;
+          
+        // Calculate LP closing gold weight value
+        const lpClosingGoldWeightValue = 
+          (currentPrice / TROY_OUNCE_GRAMS) * 
+          GOLD_CONVERSION_FACTOR * 
+          TTB_FACTOR * 
+          volume;
+        
+        // Calculate the differences at opening and closing
+        const openingDifference = Math.abs(lpEntryGoldWeightValue - orderOpeningGoldWeightValue);
+        const closingDifference = Math.abs(lpClosingGoldWeightValue - orderClosingGoldWeightValue);
+        
+        // Calculate LP profit as the sum of these differences
+        const lpProfit = openingDifference + closingDifference;
+        
+        lpPosition.profit = lpProfit.toFixed(2);
       } else if (sanitizedData.price) {
         // Just updating the current price
         lpPosition.currentPrice = currentPrice; // without spread
@@ -440,16 +500,24 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
       // If we're closing the trade, update balances and create ledger entries
       if (sanitizedData.orderStatus === "CLOSED") {
         // Update balances based on trade type
-        let newCashBalance = currentCashBalance;
-        let newMetalBalance = currentMetalBalance;
+        newCashBalance = currentCashBalance;
+        newMetalBalance = currentMetalBalance;
 
+        // If order has requiredMargin, use that for settlement, otherwise calculate
+        const settlementAmount = order.requiredMargin ? 
+          parseFloat(order.requiredMargin) : 
+          (order.type === "BUY" ? closingGoldWeightValue : entryGoldWeightValue);
+          
+        // Calculate profit to add to user's balance
+        const userProfit = clientProfit > 0 ? clientProfit : 0;
+        
         if (order.type === "BUY") {
-          // For BUY orders that are closing, add profit to cash balance and deduct gold
-          newCashBalance = currentCashBalance + closingGoldWeightValue;
+          // For BUY orders that are closing, add settlement + profit to cash balance and deduct gold
+          newCashBalance = currentCashBalance + settlementAmount + userProfit;
           newMetalBalance = currentMetalBalance - volume;
         } else if (order.type === "SELL") {
-          // For SELL orders that are closing, add profit to cash balance and add gold back
-          newCashBalance = currentCashBalance + entryGoldWeightValue;
+          // For SELL orders that are closing, add settlement + profit to cash balance and add gold back
+          newCashBalance = currentCashBalance + settlementAmount + userProfit;
           newMetalBalance = currentMetalBalance + volume;
         }
 
@@ -475,16 +543,13 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
           )}-${randomStr}`;
         };
 
-        // Create ORDER ledger entry (profit credit)
+        // Create ORDER ledger entry (settlement credit and profit if applicable)
         const orderLedgerEntry = new Ledger({
           entryId: generateEntryId("ORD"),
           entryType: "ORDER",
           referenceNumber: order.orderNo,
-          description: `Closing ${order.type} ${volume} ${order.symbol} @ ${clientClosingPrice}`,
-          amount:
-            order.type === "BUY"
-              ? closingGoldWeightValue.toFixed(2)
-              : entryGoldWeightValue.toFixed(2),
+          description: `Closing ${order.type} ${volume} ${order.symbol} @ ${clientClosingPrice}${userProfit > 0 ? ' with profit' : ''}`,
+          amount: (settlementAmount + (userProfit > 0 ? userProfit : 0)).toFixed(2),
           entryNature: "CREDIT", // Credit because money is returned to account
           runningBalance: newCashBalance.toFixed(2),
           orderDetails: {
@@ -508,10 +573,7 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
           entryType: "LP_POSITION",
           referenceNumber: order.orderNo,
           description: `LP Position closed for ${order.type} ${volume} ${order.symbol} @ ${currentPrice}`,
-          amount:
-            order.type === "BUY"
-              ? closingGoldWeightValue.toFixed(2)
-              : entryGoldWeightValue.toFixed(2),
+          amount: settlementAmount.toFixed(2),
           entryNature: "DEBIT", // Debit from LP's perspective
           runningBalance: newCashBalance.toFixed(2),
           lpDetails: {
@@ -521,7 +583,7 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
             volume: volume,
             entryPrice: parseFloat(lpPosition.entryPrice),
             closingPrice: currentPrice,
-            profit: userSpread * volume, // LP profit is user spread * volume
+            profit: lpPosition.profit,
             status: "CLOSED",
           },
           user: order.user,
@@ -536,10 +598,7 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
           entryType: "TRANSACTION",
           referenceNumber: order.orderNo,
           description: `Cash settlement for closing trade ${order.orderNo}`,
-          amount:
-            order.type === "BUY"
-              ? closingGoldWeightValue.toFixed(2)
-              : entryGoldWeightValue.toFixed(2),
+          amount: settlementAmount.toFixed(2),
           entryNature: "CREDIT", // Credit to user cash account
           runningBalance: newCashBalance.toFixed(2),
           transactionDetails: {
@@ -582,11 +641,26 @@ export const updateTradeStatus = async (adminId, orderId, updateData) => {
     }
 
     await session.commitTransaction();
-    return order;
+    committed = true; // Mark transaction as committed
+
+    return {
+      order,
+      balances: {
+        cash: newCashBalance,
+        gold: newMetalBalance,
+      },
+      profit: {
+        client: clientProfit,
+        lp: lpPosition ? parseFloat(lpPosition.profit) : 0
+      },
+    };
   } catch (error) {
-    await session.abortTransaction();
+    // Only abort if we haven't committed yet
+    if (!committed) {
+      await session.abortTransaction();
+    }
     throw new Error(`Error updating trade: ${error.message}`);
   } finally {
     session.endSession();
   }
-};
+}

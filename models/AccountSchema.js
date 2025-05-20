@@ -74,18 +74,22 @@ const AccountSchema = new mongoose.Schema(
     },
     accountStatus: {
       type: String,
-      enum: ['active', 'inactive', 'suspended', 'pending'],
-      default: 'pending',
+      enum: ["active", "inactive", "suspended", "pending"],
+      default: "pending",
     },
     kycStatus: {
       type: String,
-      enum: ['verified', 'pending', 'rejected', 'not_submitted'],
-      default: 'not_submitted',
+      enum: ["verified", "pending", "rejected", "not_submitted"],
+      default: "not_submitted",
     },
-    userSpread: {
+    askSpread: {
       type: Number,
       default: 0,
-    }
+    },
+    bidSpread: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true }
 );

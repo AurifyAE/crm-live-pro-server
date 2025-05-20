@@ -31,18 +31,18 @@ const router = express.Router();
 router.post("/login", loginAdmin);
 router.get("/fetch-data/:adminId", getAllData);
 router.post("/verify-token", adminTokenVerificationApi);
-router.get("/user-profile/:adminId/:userId", getUserProfile);
-router.put("/user-profile/:adminId/:userId", updateUserProfile);
 router.put("/update-accountType/:adminId", updateAccountType);
 router.get("/account-type", getAccountByType);
 router.put("/update-margin/:adminId", updateMarginAmount);
 router.put("/update-favorite/:adminId", updateFavoriteStatus);
 router.get("/fetch-filter", filterAccounts);
+//profile management
 router.post("/accounts/:adminId", insertAccount);
 router.put("/accounts/:ACCODE/:adminId", updateAccount);
 router.delete("/accounts/:ACCODE/:adminId", deleteAccount);
 router.get("/profile/:adminId", getAdminProfile);
-
+router.get("/user-profile/:adminId/:userId", getUserProfile);
+router.put("/user-profile/:adminId/:userId", updateUserProfile);
 //order management
 router.post("/create-order/:adminId", createTrade);
 router.get("/order/:adminId", getUserTrades);
