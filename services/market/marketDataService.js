@@ -337,14 +337,12 @@ class MarketDataService {
   }
 
   // Generate a unique order ID using more performant methods
-  generateEntryId = (prefix = "ORD") => {
-    const timestamp = Date.now().toString();
-    const randomStr = Math.random().toString(36).substring(2, 5).toUpperCase();
-    return `${prefix}-${timestamp.substring(
-      timestamp.length - 5
-    )}-${randomStr}`;
+  generateEntryId = () => {
+     const timestamp = Date.now().toString();
+    const randomStr = Math.random().toString(36).substring(2, 7).toUpperCase();
+    return `OR-${timestamp.substring(timestamp.length - 7)}`
   };
-
+  
   // Optimized subscription management
   subscribe(callback) {
     if (typeof callback !== "function") {
