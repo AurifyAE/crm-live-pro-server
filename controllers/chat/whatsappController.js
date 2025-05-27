@@ -71,7 +71,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
       case "balance":
       case "5":
         const balance = await getUserBalance(userSession.accountId);
-        responseMessage = `*Your Current Balance:*\n• Cash: $${balance.cash.toFixed(2)}\n• Gold: ${balance.gold.toFixed(2)} oz`;
+        responseMessage = `*Your Current Balance:*\n• Cash: $${balance.cash.toFixed(2)}\n• Gold: ${balance.gold.toFixed(2)} TTB`;
         break;
         
       case "cancel":

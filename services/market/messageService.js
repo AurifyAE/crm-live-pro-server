@@ -202,7 +202,7 @@ export const processUserInput = async (inputText, session, twilioClient, from, t
     }
     else if (input === "5") {
       const balance = await getUserBalance(session.accountId);
-      return `*Your Current Balance:*\n• Cash: $${balance.cash.toFixed(2)}\n• Gold: ${balance.gold.toFixed(2)} oz`;
+      return `*Your Current Balance:*\n• Cash: $${balance.cash.toFixed(2)}\n• Gold: ${balance.gold.toFixed(2)} TTB`;
     }
   }
 
@@ -221,7 +221,7 @@ export const processUserInput = async (inputText, session, twilioClient, from, t
     const total = shortcodeCommand.volume * ttbPrice;
 
     session.state = "CONFIRM_ORDER";
-    return `*Order Summary:*\n• Action: ${shortcodeCommand.action} TTB\n• Quantity: ${shortcodeCommand.volume} oz\n• Price: $${ttbPrice.toFixed(2)}/oz (${priceFreshness})\n• Total: $${total.toFixed(2)}\n\n*Reply with "Y" to confirm or "N" to cancel.*`;
+    return `*Order Summary:*\n• Action: ${shortcodeCommand.action} TTB\n• Quantity: ${shortcodeCommand.volume} TTB\n• Price: $${ttbPrice.toFixed(2)}/TTB (${priceFreshness})\n• Total: $${total.toFixed(2)}\n\n*Reply with "Y" to confirm or "N" to cancel.*`;
   }
 
   const closeCommandMatch = inputText.toUpperCase().match(/^CLOSE\s+(.+)$/);
@@ -243,7 +243,7 @@ export const processUserInput = async (inputText, session, twilioClient, from, t
     const result = await processOrderClose(session, orderId);
     if (result.success) {
       await storeUserOrdersInSession(session);
-      return `✅ Order ${result.orderNo} closed successfully.\n\n*Results:*\n• Profit: $${result.profit}\n• New balances:\n  - Cash: $${result.newCashBalance}\n  - Gold: ${result.newGoldBalance} oz`;
+      return `✅ Order ${result.orderNo} closed successfully.\n\n*Results:*\n• Profit: $${result.profit}\n• New balances:\n  - Cash: $${result.newCashBalance}\n  - Gold: ${result.newGoldBalance} TTB`;
     }
     return `❌ Failed to close order: ${result.message}`;
   }
@@ -274,7 +274,7 @@ export const processUserInput = async (inputText, session, twilioClient, from, t
       } 
       else if (input.includes("balance")) {
         const balance = await getUserBalance(session.accountId);
-        return `*Your Current Balance:*\n• Cash: $${balance.cash.toFixed(2)}\n• Gold: ${balance.gold.toFixed(2)} oz`;
+        return `*Your Current Balance:*\n• Cash: $${balance.cash.toFixed(2)}\n• Gold: ${balance.gold.toFixed(2)} TTB`;
       }
       return await getMainMenu();
     
@@ -296,7 +296,7 @@ export const processUserInput = async (inputText, session, twilioClient, from, t
         const priceFreshness = priceAge < 60000 ? "Live" : "Delayed";
         session.state = "CONFIRM_ORDER";
 
-        return `*Order Summary:*\n• Action: ${orderType} TTB\n• Quantity: ${quantity} oz\n• Price: $${ttbPrice.toFixed(2)}/oz (${priceFreshness})\n• Total: $${session.currentOrder.total.toFixed(2)}\n\n*Reply with "Y" to confirm or "N" to cancel.*`;
+        return `*Order Summary:*\n• Action: ${orderType} TTB\n• Quantity: ${quantity} TTB\n• Price: $${ttbPrice.toFixed(2)}/TTB (${priceFreshness})\n• Total: $${session.currentOrder.total.toFixed(2)}\n\n*Reply with "Y" to confirm or "N" to cancel.*`;
       }
       return "Please enter a valid quantity (a positive number) or type 'CANCEL' to return to menu.";
     
@@ -307,7 +307,7 @@ export const processUserInput = async (inputText, session, twilioClient, from, t
         if (result.success) {
           await storeUserOrdersInSession(session);
           const orderIndex = session.openOrders.findIndex((order) => order._id.toString() === result.orderId.toString()) + 1;
-          return `✅ *Trade Successful!*\n\nOrder No: ${result.orderNo}\n\n*Details:*\n• Action: ${session.currentOrder.type} TTB\n• Quantity: ${result.volume} oz\n• Price: $${result.price.toFixed(2)}/oz\n• Total: $${result.total}\n\n*To close:* Send "CLOSE ${orderIndex}"`;
+          return `✅ *Trade Successful!*\n\nOrder No: ${result.orderNo}\n\n*Details:*\n• Action: ${session.currentOrder.type} TTB\n• Quantity: ${result.volume} TTB\n• Price: $${result.price.toFixed(2)}/oz\n• Total: $${result.total}\n\n*To close:* Send "CLOSE ${orderIndex}"`;
         }
         return `❌ Order failed: ${result.message}\n\nPlease try again or contact support.`;
       } else if (input === "n" || input.includes("no") || input.includes("cancel")) {
