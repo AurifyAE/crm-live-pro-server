@@ -1,8 +1,20 @@
-import mt5linux as mt5
 import sys
 import json
 import time
 from datetime import datetime
+
+# Attempt to import mt5linux, fallback to MetaTrader5 if it fails
+try:
+    import mt5linux as mt5
+    print("Using mt5linux module", file=sys.stderr)
+except ImportError as e:
+    print(f"Failed to import mt5linux: {str(e)}. Attempting to use MetaTrader5...", file=sys.stderr)
+    try:
+        import MetaTrader5 as mt5
+        print("Using MetaTrader5 module as fallback", file=sys.stderr)
+    except ImportError as e:
+        print(f"Failed to import MetaTrader5: {str(e)}. No MT5 module available.", file=sys.stderr)
+        sys.exit(1)
 
 class MT5Connector:
     def __init__(self):
@@ -10,7 +22,10 @@ class MT5Connector:
         
     def connect(self, server, login, password):
         try:
-            if not hasattr(mt5, 'initialize') or not mt5.initialize():
+            if not hasattr(mt5, 'initialize'):
+                print("MT5 module does not contain initialize function", file=sys.stderr)
+                return {"success": False, "error": "MT5 module does not contain initialize function"}
+            if not mt5.initialize():
                 print("MT5 initialization failed", file=sys.stderr)
                 return {"success": False, "error": "MT5 initialization failed"}
             authorized = mt5.login(login, password=password, server=server)
@@ -365,11 +380,11 @@ def main():
 
 if __name__ == "__main__":
     try:
-        # Verify mt5linux module is properly loaded
+        # Verify MT5 module is properly loaded
         if not hasattr(mt5, 'initialize'):
-            print("Error: mt5linux module does not contain required MT5 functionality", file=sys.stderr)
+            print("Error: MT5 module does not contain required MT5 functionality", file=sys.stderr)
             sys.exit(1)
         main()
-    except ImportError as e:
-        print(f"Failed to import mt5linux: {str(e)}", file=sys.stderr)
+    except Exception as e:
+        print(f"Failed to start MT5 connector: {str(e)}", file=sys.stderr)
         sys.exit(1)
