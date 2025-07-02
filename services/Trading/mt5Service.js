@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import EventEmitter from "events";
+import fs from "fs";
 
 class MT5Service extends EventEmitter {
   constructor() {
@@ -12,48 +13,164 @@ class MT5Service extends EventEmitter {
     this.responseCallbacks = new Map();
     this.requestId = 0;
     this.availableSymbols = new Set();
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
 
     this.initializePythonBridge();
     this.setupResponseHandlers();
   }
 
-initializePythonBridge() {
-  try {
-    const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
-    const pythonExecutable = "xvfb-run -a wine ~/.wine/drive_c/Python310/python.exe";
-    this.pythonProcess = spawn(pythonExecutable, [pythonScriptPath], {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: true,
-    });
+  initializePythonBridge() {
+    try {
+      const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
+      const winePythonPath = "/home/ubuntu/.wine/drive_c/Python310/python.exe";
+      
+      // Check if Wine Python exists
+      const wineExists = fs.existsSync(winePythonPath);
+      
+      if (!wineExists) {
+        console.warn("Wine Python not found. Attempting installation or using fallback...");
+        this.initializeFallbackBridge();
+        return;
+      }
 
-    this.pythonProcess.stdout.on("data", (data) =>
-      this.handlePythonResponse(data.toString())
-    );
-    this.pythonProcess.stderr.on("data", (data) =>
-      console.error("MT5 Python log:", data.toString())
-    );
-    this.pythonProcess.on("close", (code) => {
-      console.log(`MT5 Python exited with code ${code}`);
-      this.isConnected = false;
-      this.emit("disconnected");
-    });
-    console.log("MT5 Python bridge initialized");
-  } catch (error) {
-    console.error("Python bridge initialization failed:", error);
-    throw error;
-  }
-}
+      // Use xvfb-run with proper arguments for Wine Python
+      const pythonExecutable = "xvfb-run";
+      const args = [
+        "-a",                                    // Auto-select display
+        "-s", "-screen 0 1024x768x24",          // Screen configuration
+        "wine",                                  // Wine executable
+        winePythonPath,                          // Python path in Wine
+        pythonScriptPath                         // Script path
+      ];
 
-  setupResponseHandlers() {
-    this.on("price_update", (data) => {
-      this.priceData.set(data.symbol, {
-        bid: data.bid,
-        ask: data.ask,
-        spread: data.spread,
-        timestamp: new Date(),
+      this.pythonProcess = spawn(pythonExecutable, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: false,
+        env: {
+          ...process.env,
+          DISPLAY: ":99",
+          WINEDEBUG: "-all",  // Suppress Wine debug messages
+          WINEPREFIX: "/home/ubuntu/.wine"
+        }
       });
-      this.lastPriceUpdate.set(data.symbol, Date.now());
-    });
+
+      this.pythonProcess.stdout.on("data", (data) => {
+        const output = data.toString();
+        this.handlePythonResponse(output);
+      });
+
+      this.pythonProcess.stderr.on("data", (data) => {
+        const errorOutput = data.toString();
+        // Filter out Wine-specific errors but log others
+        if (!this.isWineError(errorOutput)) {
+          console.error("MT5 Python log:", errorOutput);
+        } else {
+          console.log("Filtered Wine message:", errorOutput.trim());
+        }
+      });
+
+      this.pythonProcess.on("close", (code) => {
+        console.log(`MT5 Python exited with code ${code}`);
+        this.isConnected = false;
+        this.emit("disconnected");
+        
+        // Handle specific error codes
+        if (code === 53 && this.reconnectAttempts < this.maxReconnectAttempts) {
+          console.log(`Attempting to restart MT5 bridge (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`);
+          this.reconnectAttempts++;
+          setTimeout(() => {
+            this.initializePythonBridge();
+          }, 5000);
+        } else if (code === 53) {
+          console.log("Max reconnection attempts reached. Switching to fallback mode.");
+          this.initializeFallbackBridge();
+        }
+      });
+
+      this.pythonProcess.on("error", (error) => {
+        console.error("Python process error:", error);
+        this.initializeFallbackBridge();
+      });
+
+      console.log("MT5 Python bridge initialized with Wine");
+    } catch (error) {
+      console.error("Python bridge initialization failed:", error);
+      this.initializeFallbackBridge();
+    }
+  }
+
+  initializeFallbackBridge() {
+    try {
+      const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
+      
+      console.log("Attempting fallback to native Python...");
+      
+      // Try different Python executables
+      const pythonExecutables = ['python3', 'python', 'python3.10'];
+      
+      for (const pythonExe of pythonExecutables) {
+        try {
+          this.pythonProcess = spawn(pythonExe, [pythonScriptPath], {
+            stdio: ["pipe", "pipe", "pipe"],
+            cwd: "/home/ubuntu/crm-live-pro-server/python",
+            env: {
+              ...process.env,
+              PYTHONPATH: "/home/ubuntu/crm-live-pro-server/python"
+            }
+          });
+
+          this.pythonProcess.stdout.on("data", (data) =>
+            this.handlePythonResponse(data.toString())
+          );
+          
+          this.pythonProcess.stderr.on("data", (data) =>
+            console.error("MT5 Python fallback log:", data.toString())
+          );
+          
+          this.pythonProcess.on("close", (code) => {
+            console.log(`MT5 Python fallback exited with code ${code}`);
+            this.isConnected = false;
+            this.emit("disconnected");
+          });
+
+          this.pythonProcess.on("error", (error) => {
+            console.error(`Fallback ${pythonExe} failed:`, error);
+          });
+
+          console.log(`MT5 Python fallback bridge initialized with ${pythonExe}`);
+          return; // Success, exit the loop
+          
+        } catch (error) {
+          console.log(`Failed to initialize with ${pythonExe}:`, error.message);
+          continue; // Try next executable
+        }
+      }
+      
+      // If all executables failed
+      throw new Error("All Python executables failed");
+      
+    } catch (error) {
+      console.error("Fallback bridge initialization failed:", error);
+      console.log("Running in market data backup mode only");
+      this.isConnected = false;
+    }
+  }
+
+  isWineError(output) {
+    const wineErrorPatterns = [
+      "wine:",
+      "X connection",
+      "c0000135",
+      "Could not resolve keysym",
+      "xkbcomp",
+      "Warning:",
+      "Errors from xkbcomp are not fatal"
+    ];
+    
+    return wineErrorPatterns.some(pattern => 
+      output.toLowerCase().includes(pattern.toLowerCase())
+    );
   }
 
   handlePythonResponse(data) {
@@ -61,6 +178,12 @@ initializePythonBridge() {
       const lines = data.trim().split("\n");
       lines.forEach((line) => {
         if (line.trim()) {
+          // Skip Wine error messages
+          if (this.isWineError(line)) {
+            console.log("Skipping Wine error:", line.trim());
+            return;
+          }
+          
           try {
             const response = JSON.parse(line);
             if (response.type === "price_update") {
@@ -72,6 +195,15 @@ initializePythonBridge() {
               const callback = this.responseCallbacks.get(response.requestId);
               this.responseCallbacks.delete(response.requestId);
               callback(response);
+            } else if (response.type === "connection_status") {
+              if (response.connected) {
+                this.isConnected = true;
+                this.reconnectAttempts = 0; // Reset counter on successful connection
+                this.emit("connected");
+              } else {
+                this.isConnected = false;
+                this.emit("disconnected");
+              }
             }
           } catch (jsonError) {
             console.warn("Skipping non-JSON line:", line);
@@ -83,10 +215,31 @@ initializePythonBridge() {
     }
   }
 
+  setupResponseHandlers() {
+    this.on("price_update", (data) => {
+      this.priceData.set(data.symbol, {
+        bid: data.bid,
+        ask: data.ask,
+        spread: data.spread,
+        timestamp: new Date(),
+      });
+      this.lastPriceUpdate.set(data.symbol, Date.now());
+    });
+
+    this.on("connected", () => {
+      console.log("MT5 Service connected successfully");
+    });
+
+    this.on("disconnected", () => {
+      console.log("MT5 Service disconnected");
+    });
+  }
+
   async sendCommand(command, timeout = 30000) {
     return new Promise((resolve, reject) => {
       if (!this.pythonProcess) {
         reject(new Error("Python process not initialized"));
+        return;
       }
 
       const requestId = ++this.requestId;
@@ -110,14 +263,20 @@ initializePythonBridge() {
         }
       });
 
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (this.responseCallbacks.has(requestId)) {
           this.responseCallbacks.delete(requestId);
           reject(new Error("Request timeout"));
         }
       }, timeout);
 
-      this.pythonProcess.stdin.write(JSON.stringify(commandWithId) + "\n");
+      try {
+        this.pythonProcess.stdin.write(JSON.stringify(commandWithId) + "\n");
+      } catch (error) {
+        clearTimeout(timeoutId);
+        this.responseCallbacks.delete(requestId);
+        reject(new Error(`Failed to send command: ${error.message}`));
+      }
     });
   }
 
@@ -530,6 +689,17 @@ initializePythonBridge() {
     }
   }
 
+  // Health check method
+  getServiceStatus() {
+    return {
+      isConnected: this.isConnected,
+      processRunning: this.pythonProcess !== null,
+      reconnectAttempts: this.reconnectAttempts,
+      availableSymbols: this.availableSymbols.size,
+      cachedPrices: this.priceData.size
+    };
+  }
+
   async disconnect() {
     if (this.pythonProcess) {
       try {
@@ -541,6 +711,7 @@ initializePythonBridge() {
       this.pythonProcess = null;
     }
     this.isConnected = false;
+    this.reconnectAttempts = 0;
   }
 }
 
