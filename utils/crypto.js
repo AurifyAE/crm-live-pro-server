@@ -1,12 +1,15 @@
 import crypto from "crypto";
 import dotenv from "dotenv";
 
-dotenv.config()
-// Define your encryption settings
-const algorithm = "aes-256-cbc";
-const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "base64");
+dotenv.config();
 
-// Function to encrypt the password
+const algorithm = "aes-256-cbc";
+const encryptionKey = process.env.ENCRYPTION_KEY;
+if (!encryptionKey) {
+  throw new Error("ENCRYPTION_KEY is not defined in .env. Please set a valid base64-encoded key.");
+}
+const secretKey = Buffer.from(encryptionKey, "base64");
+
 export const encryptPassword = (password) => {
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(algorithm, secretKey, iv);
@@ -17,7 +20,6 @@ export const encryptPassword = (password) => {
   };
 };
 
-// Function to decrypt the password
 export const decryptPassword = (encryptedPassword, ivHex) => {
   try {
     const iv = Buffer.from(ivHex, "hex");
@@ -30,6 +32,6 @@ export const decryptPassword = (encryptedPassword, ivHex) => {
     return decrypted.toString();
   } catch (error) {
     console.error("Decryption error:", error);
-    throw error; // Re-throw the error for proper handling in the calling function
+    throw error;
   }
 };
