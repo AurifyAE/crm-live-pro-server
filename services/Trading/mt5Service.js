@@ -17,34 +17,32 @@ class MT5Service extends EventEmitter {
     this.setupResponseHandlers();
   }
 
-  initializePythonBridge() {
-    try {
-      // Explicitly set the path to mt5_connector.py
-      const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
-      // Use Wine's Python executable path
-      const pythonExecutable = "wine ~/.wine/drive_c/Python310/python.exe";
-      this.pythonProcess = spawn(pythonExecutable, [pythonScriptPath], {
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: true, // Required for Wine command
-      });
+initializePythonBridge() {
+  try {
+    const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
+    const pythonExecutable = "xvfb-run -a wine ~/.wine/drive_c/Python310/python.exe";
+    this.pythonProcess = spawn(pythonExecutable, [pythonScriptPath], {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: true,
+    });
 
-      this.pythonProcess.stdout.on("data", (data) =>
-        this.handlePythonResponse(data.toString())
-      );
-      this.pythonProcess.stderr.on("data", (data) =>
-        console.error("MT5 Python log:", data.toString())
-      );
-      this.pythonProcess.on("close", (code) => {
-        console.log(`MT5 Python exited with code ${code}`);
-        this.isConnected = false;
-        this.emit("disconnected");
-      });
-      console.log("MT5 Python bridge initialized");
-    } catch (error) {
-      console.error("Python bridge initialization failed:", error);
-      throw error;
-    }
+    this.pythonProcess.stdout.on("data", (data) =>
+      this.handlePythonResponse(data.toString())
+    );
+    this.pythonProcess.stderr.on("data", (data) =>
+      console.error("MT5 Python log:", data.toString())
+    );
+    this.pythonProcess.on("close", (code) => {
+      console.log(`MT5 Python exited with code ${code}`);
+      this.isConnected = false;
+      this.emit("disconnected");
+    });
+    console.log("MT5 Python bridge initialized");
+  } catch (error) {
+    console.error("Python bridge initialization failed:", error);
+    throw error;
   }
+}
 
   setupResponseHandlers() {
     this.on("price_update", (data) => {
