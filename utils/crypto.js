@@ -1,6 +1,7 @@
 import crypto from "crypto";
-import "dotenv/config";
+import dotenv from "dotenv";
 
+dotenv.config()
 // Define your encryption settings
 const algorithm = "aes-256-cbc";
 const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "base64");
