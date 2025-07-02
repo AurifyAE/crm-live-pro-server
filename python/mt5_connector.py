@@ -254,7 +254,7 @@ class MT5Connector:
                     "magic": pos.magic,
                     "comment": f"Close {ticket}",
                     "type_filling": filling_type,
-                    "deviation": Tide: 20 + attempt * 10
+                    "deviation": 20 + attempt * 10
                 }
                 print(f"Close request (attempt {attempt + 1}/{max_retries}): {json.dumps(request)}", file=sys.stderr)
                 result = mt5.order_send(request)
