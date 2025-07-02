@@ -8,7 +8,7 @@ import chatRouter from './routers/chat/index.js'
 import { mongodb } from "./config/connection.js";
 import { errorHandler } from "./utils/errorHandler.js";
 // Import the market service to initialize it when the server starts
-import "./services/market/marketDataService.js";
+// import "./services/market/marketDataService.js";
 
 dotenv.config();
 

@@ -1,8 +1,7 @@
-import mongoose from "mongoose";
+import mongoose from 'mongoose';
 
 const AccountSchema = new mongoose.Schema(
   {
-    // Existing fields
     REFMID: {
       type: Number,
       required: true,
@@ -55,11 +54,13 @@ const AccountSchema = new mongoose.Schema(
     email: {
       type: String,
       default: null,
-      sparse: true, // Allows multiple null values while still enabling uniqueness for non-null values
+      sparse: true,
     },
     phoneNumber: {
       type: String,
-      default: null,
+      required: true,
+      match: [/^\+\d{10,15}$/, 'Phone number must be in E.164 format (e.g., +918138823410)'],
+      unique: true,
     },
     address: {
       street: { type: String, default: null },
