@@ -5,9 +5,9 @@ import Ledger from "../../models/LedgerSchema.js";
 import Account from "../../models/AccountSchema.js";
 import mt5Service from "../../services/Trading/mt5Service.js";
 
-const TROY_OUNCE_GRAMS = 31.1035;
+const TROY_OUNCE_GRAMS = 31.103;
 const GOLD_CONVERSION_FACTOR = 3.674;
-const TTB_FACTOR = 0.995;
+const TTB_FACTOR = 116.64;
 
 // Symbol mapping for CRM to MT5
 const SYMBOL_MAPPING = {
@@ -511,10 +511,10 @@ export const updateTradeStatus = async (
         if (mt5CloseResult && mt5CloseResult.success) {
           sanitizedData.closingPrice =
             mt5CloseResult.closePrice || mt5CloseResult.data.price;
-          sanitizedData.profit =
-            mt5CloseResult.profit !== undefined
-              ? mt5CloseResult.profit
-              : mt5CloseResult.data.profit;
+          // sanitizedData.profit =
+          //   mt5CloseResult.profit !== undefined
+          //     ? mt5CloseResult.profit
+          //     : mt5CloseResult.data.profit;
         } else {
           const priceData = await mt5Service.getPrice(
             SYMBOL_MAPPING[order.symbol] || order.symbol

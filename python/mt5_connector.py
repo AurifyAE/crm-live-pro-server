@@ -1,20 +1,11 @@
+from flask import Flask, request, jsonify
+import MetaTrader5 as mt5
 import sys
 import json
 import time
 from datetime import datetime
 
-# Attempt to import mt5linux, fallback to MetaTrader5 if it fails
-try:
-    import mt5linux as mt5
-    print("Using mt5linux module", file=sys.stderr)
-except ImportError as e:
-    print(f"Failed to import mt5linux: {str(e)}. Attempting to use MetaTrader5...", file=sys.stderr)
-    try:
-        import MetaTrader5 as mt5
-        print("Using MetaTrader5 module as fallback", file=sys.stderr)
-    except ImportError as e:
-        print(f"Failed to import MetaTrader5: {str(e)}. No MT5 module available.", file=sys.stderr)
-        sys.exit(1)
+app = Flask(__name__)
 
 class MT5Connector:
     def __init__(self):
@@ -22,107 +13,117 @@ class MT5Connector:
         
     def connect(self, server, login, password):
         try:
-            if not hasattr(mt5, 'initialize'):
-                print("MT5 module does not contain initialize function", file=sys.stderr)
-                return {"success": False, "error": "MT5 module does not contain initialize function"}
             if not mt5.initialize():
-                print("MT5 initialization failed", file=sys.stderr)
-                return {"success": False, "error": "MT5 initialization failed"}
+                return False, "MT5 initialization failed"
+            
             authorized = mt5.login(login, password=password, server=server)
             if not authorized:
                 error = mt5.last_error()
-                print(f"Login failed: {error}", file=sys.stderr)
-                return {"success": False, "error": f"Login failed: {error}"}
+                return False, f"Login failed: {error}"
+            
             self.connected = True
             account_info = mt5.account_info()
             if account_info and not account_info.trade_expert:
-                print("AutoTrading disabled", file=sys.stderr)
-                return {"success": False, "error": "AutoTrading disabled. Enable 'Algo Trading' in MT5"}
-            print(f"Connected to MT5, account: {account_info.login if account_info else None}", file=sys.stderr)
-            return {"success": True, "data": {"message": "Connected", "account": account_info.login if account_info else None}}
+                return False, "AutoTrading disabled. Enable 'Algo Trading' in MT5"
+            
+            return True, {"message": "Connected", "account": account_info.login if account_info else None}
         except Exception as e:
-            print(f"Exception in connect: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
+
+    def disconnect(self):
+        self.connected = False
+        mt5.shutdown()
+        return True, "Disconnected"
 
     def get_symbols(self):
         try:
             if not self.connected:
-                return {"success": False, "error": "Not connected"}
+                return False, "Not connected"
             symbols = mt5.symbols_get() or []
-            return {"success": True, "data": [symbol.name for symbol in symbols]}
+            return True, [symbol.name for symbol in symbols]
         except Exception as e:
-            print(f"Exception in get_symbols: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
 
     def get_symbol_info(self, symbol):
         try:
             if not self.connected:
-                return {"success": False, "error": "Not connected"}
+                return False, "Not connected"
+            
             if not mt5.symbol_select(symbol, True):
-                print(f"Symbol {symbol} not selected", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not selected"}
+                return False, f"Symbol {symbol} not selected"
+            
             info = mt5.symbol_info(symbol)
             if not info:
-                print(f"Symbol {symbol} not found", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not found"}
+                return False, f"Symbol {symbol} not found"
+            
             stops_level = getattr(info, 'stops_level', 0)
-            return {"success": True, "data": {
-                "name": info.name, "point": info.point, "digits": info.digits, "spread": info.spread,
-                "trade_mode": info.trade_mode, "volume_min": info.volume_min, "volume_max": info.volume_max,
-                "volume_step": info.volume_step, "stops_level": stops_level, "filling_mode": info.filling_mode
-            }}
+            return True, {
+                "name": info.name,
+                "point": info.point,
+                "digits": info.digits,
+                "spread": info.spread,
+                "trade_mode": info.trade_mode,
+                "volume_min": info.volume_min,
+                "volume_max": info.volume_max,
+                "volume_step": info.volume_step,
+                "stops_level": stops_level,
+                "filling_mode": info.filling_mode
+            }
         except Exception as e:
-            print(f"Exception in get_symbol_info: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
 
     def get_price(self, symbol):
         try:
             if not self.connected:
-                return {"success": False, "error": "Not connected"}
+                return False, "Not connected"
+            
             if not mt5.symbol_select(symbol, True):
-                print(f"Symbol {symbol} not selected", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not selected"}
-            time.sleep(0.1)
+                return False, f"Symbol {symbol} not selected"
+            
+            time.sleep(0.1)  # Small delay for price update
             tick = mt5.symbol_info_tick(symbol)
+            
             if not tick:
                 rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
-                if not rates or len(rates) == 0:
-                    print(f"No tick or rates for {symbol}", file=sys.stderr)
-                    return {"success": False, "error": f"No tick or rates for {symbol}"}
+                if not rates or not len(rates):
+                    return False, f"No price data for {symbol}"
+                
                 rate = rates[0]
-                return {"success": True, "data": {
+                return True, {
                     "symbol": symbol,
                     "bid": rate['close'],
                     "ask": rate['close'],
                     "spread": 0,
                     "time": datetime.fromtimestamp(rate['time']).isoformat()
-                }}
-            spread = (tick.ask - tick.bid) / mt5.symbol_info(symbol).point if mt5.symbol_info(symbol) and mt5.symbol_info(symbol).point > 0 else 0
-            return {"success": True, "data": {
+                }
+            
+            symbol_info = mt5.symbol_info(symbol)
+            spread = (tick.ask - tick.bid) / symbol_info.point if symbol_info.point > 0 else 0
+            
+            return True, {
                 "symbol": symbol,
                 "bid": tick.bid,
                 "ask": tick.ask,
                 "spread": spread,
                 "time": datetime.fromtimestamp(tick.time).isoformat()
-            }}
+            }
         except Exception as e:
-            print(f"Exception in get_price: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
 
     def place_trade(self, symbol, volume, order_type, sl_distance=10.0, tp_distance=10.0, comment="", magic=0):
         try:
             if not self.connected:
-                return {"success": False, "error": "Not connected"}
+                return False, "Not connected"
+            
             if not mt5.symbol_select(symbol, True):
-                print(f"Symbol {symbol} not selected", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not selected"}
+                return False, f"Symbol {symbol} not selected"
+            
             info = mt5.symbol_info(symbol)
             if not info:
-                print(f"Symbol {symbol} not found", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not found"}
+                return False, f"Symbol {symbol} not found"
+            
             if info.trade_mode == 0:
-                print(f"Symbol {symbol} not tradable (trade_mode=0)", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not tradable"}
+                return False, f"Symbol {symbol} not tradable"
             
             stop_level = getattr(info, 'stops_level', 0) * info.point
             if sl_distance < stop_level:
@@ -132,8 +133,8 @@ class MT5Connector:
 
             tick = mt5.symbol_info_tick(symbol)
             if not tick:
-                print(f"No price for {symbol}", file=sys.stderr)
-                return {"success": False, "error": f"No price for {symbol}"}
+                return False, f"No price for {symbol}"
+            
             order_type = order_type.upper()
             if order_type == "BUY":
                 mt5_type = mt5.ORDER_TYPE_BUY
@@ -146,11 +147,15 @@ class MT5Connector:
                 sl = round(price + sl_distance, info.digits)
                 tp = round(price - tp_distance, info.digits)
             else:
-                print(f"Invalid type {order_type}", file=sys.stderr)
-                return {"success": False, "error": f"Invalid type {order_type}"}
+                return False, f"Invalid order type {order_type}"
 
             volume = max(info.volume_min, min(info.volume_max, round(volume / info.volume_step) * info.volume_step))
-            filling_type = {0: mt5.ORDER_FILLING_FOK, 1: mt5.ORDER_FILLING_IOC, 2: mt5.ORDER_FILLING_RETURN}.get(info.filling_mode & 0b11, mt5.ORDER_FILLING_IOC)
+            
+            filling_type = {
+                0: mt5.ORDER_FILLING_FOK,
+                1: mt5.ORDER_FILLING_IOC,
+                2: mt5.ORDER_FILLING_RETURN
+            }.get(info.filling_mode & 0b11, mt5.ORDER_FILLING_IOC)
 
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -166,29 +171,36 @@ class MT5Connector:
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": filling_type
             }
-            print(f"Trade request: {json.dumps(request)}", file=sys.stderr)
+            
             result = mt5.order_send(request)
             if result is None:
                 error = mt5.last_error()
                 error_code = error[0] if isinstance(error, tuple) else getattr(error, 'code', -1)
                 error_comment = error[1] if isinstance(error, tuple) else getattr(error, 'comment', 'Unknown error')
-                print(f"Order send failed: {error_code} - {error_comment}", file=sys.stderr)
-                if error_code == 10013:  # Requote
-                    print(f"Requote detected, retrying with deviation 50", file=sys.stderr)
+                
+                if error_code == 10013:
                     request["deviation"] = 50
                     result = mt5.order_send(request)
                     if result is None:
                         error = mt5.last_error()
                         error_code = error[0] if isinstance(error, tuple) else getattr(error, 'code', -1)
                         error_comment = error[1] if isinstance(error, tuple) else getattr(error, 'comment', 'Unknown error')
-                        return {"success": False, "error": f"Order send failed: Code: {error_code} - {error_comment}"}
+                        return False, f"Order failed: Code: {error_code} - {error_comment}"
                 else:
-                    return {"success": False, "error": f"Order send failed: Code: {error_code} - {error_comment}"}
+                    return False, f"Order failed: Code: {error_code} - {error_comment}"
+            
             if result.retcode == mt5.TRADE_RETCODE_DONE:
-                return {"success": True, "data": {
-                    "order": result.order, "deal": result.deal, "volume": result.volume, "price": result.price,
-                    "sl": sl, "tp": tp, "comment": comment, "retcode": result.retcode
-                }}
+                return True, {
+                    "order": result.order,
+                    "deal": result.deal,
+                    "volume": result.volume,
+                    "price": result.price,
+                    "sl": sl,
+                    "tp": tp,
+                    "comment": comment,
+                    "retcode": result.retcode
+                }
+            
             error_codes = {
                 10018: "Market closed",
                 10019: "Insufficient funds",
@@ -199,66 +211,60 @@ class MT5Connector:
                 10027: "AutoTrading disabled"
             }
             error_msg = error_codes.get(result.retcode, f"Error {result.retcode}")
-            print(f"Order failed with retcode {result.retcode}: {error_msg}", file=sys.stderr)
-            return {"success": False, "error": f"Order failed: {error_msg}"}
+            return False, f"Order failed: {error_msg}"
+            
         except Exception as e:
-            print(f"Exception in place_trade: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
 
-    def close_trade(self, ticket, volume, symbol=None, order_type=None, max_retries=3):
+    def close_trade(self, ticket, volume=None, symbol=None, max_retries=3):
         try:
             if not self.connected:
-                print("Not connected to MT5", file=sys.stderr)
-                return {"success": False, "error": "Not connected"}
+                return False, "Not connected"
             
-            print(f"Attempting to fetch position for ticket {ticket}", file=sys.stderr)
             position = mt5.positions_get(ticket=ticket)
             if not position:
-                print(f"Position {ticket} not found in MT5", file=sys.stderr)
-                return {"success": False, "error": f"Position {ticket} not found"}
-            pos = position[0]
+                return False, f"Position {ticket} not found"
             
+            pos = position[0]
             symbol = symbol or pos.symbol
             position_type = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
-            position_volume = pos.volume
-
-            if order_type and order_type.upper() != ("SELL" if position_type == "BUY" else "BUY"):
-                print(f"Invalid order type {order_type} for position type {position_type}", file=sys.stderr)
-                return {"success": False, "error": f"Invalid order type {order_type} for position type {position_type}"}
-
+            
+            if volume is None:
+                volume = pos.volume
+            else:
+                volume = min(volume, pos.volume)
+            
             if not mt5.symbol_select(symbol, True):
-                print(f"Symbol {symbol} not selected", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not selected"}
+                return False, f"Symbol {symbol} not selected"
+            
             info = mt5.symbol_info(symbol)
             if not info:
-                print(f"Symbol {symbol} not found", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not found"}
+                return False, f"Symbol {symbol} not found"
+            
             if info.trade_mode == 0:
-                print(f"Symbol {symbol} not tradable (trade_mode=0)", file=sys.stderr)
-                return {"success": False, "error": f"Symbol {symbol} not tradable"}
-
-            if volume != position_volume:
-                print(f"Volume mismatch: Requested {volume}, Position {position_volume}. Using position volume.", file=sys.stderr)
-            volume = position_volume
+                return False, f"Symbol {symbol} not tradable"
+            
             volume = max(info.volume_min, min(info.volume_max, round(volume / info.volume_step) * info.volume_step))
             
             if volume < info.volume_min:
-                print(f"Volume {volume} below minimum {info.volume_min}", file=sys.stderr)
-                return {"success": False, "error": f"Volume {volume} below minimum {info.volume_min}"}
+                return False, f"Volume {volume} below minimum {info.volume_min}"
             if volume > info.volume_max:
-                print(f"Volume {volume} exceeds maximum {info.volume_max}", file=sys.stderr)
-                return {"success": False, "error": f"Volume {volume} exceeds maximum {info.volume_max}"}
+                return False, f"Volume {volume} exceeds maximum {info.volume_max}"
 
-            tick = mt5.symbol_info_tick(symbol)
-            if not tick:
-                print(f"No price for {symbol}", file=sys.stderr)
-                return {"success": False, "error": f"No price for {symbol}"}
-            price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
-
-            filling_type = {0: mt5.ORDER_FILLING_FOK, 1: mt5.ORDER_FILLING_IOC, 2: mt5.ORDER_FILLING_RETURN}.get(info.filling_mode & 0b11, mt5.ORDER_FILLING_IOC)
+            filling_type = {
+                0: mt5.ORDER_FILLING_FOK,
+                1: mt5.ORDER_FILLING_IOC,
+                2: mt5.ORDER_FILLING_RETURN
+            }.get(info.filling_mode & 0b11, mt5.ORDER_FILLING_IOC)
 
             for attempt in range(max_retries):
+                tick = mt5.symbol_info_tick(symbol)
+                if not tick:
+                    return False, f"No price for {symbol}"
+                
+                price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
+
                 request = {
                     "action": mt5.TRADE_ACTION_DEAL,
                     "symbol": symbol,
@@ -271,19 +277,16 @@ class MT5Connector:
                     "type_filling": filling_type,
                     "deviation": 20 + attempt * 10
                 }
-                print(f"Close request (attempt {attempt + 1}/{max_retries}): {json.dumps(request)}", file=sys.stderr)
-                result = mt5.order_send(request)
                 
+                result = mt5.order_send(request)
                 if result is None:
                     error = mt5.last_error()
                     error_code = error[0] if isinstance(error, tuple) else getattr(error, 'code', -1)
                     error_comment = error[1] if isinstance(error, tuple) else getattr(error, 'comment', 'Unknown error')
-                    print(f"Close failed: Code: {error_code} - {error_comment}", file=sys.stderr)
-                    return {"success": False, "error": f"Close failed: Code: {error_code} - {error_comment}"}
+                    return False, f"Close failed: Code: {error_code} - {error_comment}"
                 
                 if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    print(f"Close successful: Ticket {ticket}, Volume {volume}, Price {result.price}", file=sys.stderr)
-                    return {"success": True, "data": {
+                    return True, {
                         "deal": result.deal,
                         "retcode": result.retcode,
                         "price": result.price,
@@ -291,15 +294,9 @@ class MT5Connector:
                         "profit": pos.profit,
                         "symbol": symbol,
                         "position_type": position_type
-                    }}
+                    }
                 
                 if result.retcode == 10021 and attempt < max_retries - 1:
-                    print(f"Retcode 10021 (Invalid request) on attempt {attempt + 1}. Retrying with updated price and filling mode.", file=sys.stderr)
-                    tick = mt5.symbol_info_tick(symbol)
-                    if not tick:
-                        print(f"No price for {symbol} on retry", file=sys.stderr)
-                        return {"success": False, "error": f"No price for {symbol} on retry"}
-                    price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
                     filling_type = mt5.ORDER_FILLING_IOC if filling_type == mt5.ORDER_FILLING_FOK else mt5.ORDER_FILLING_FOK
                     time.sleep(0.5)
                     continue
@@ -314,77 +311,171 @@ class MT5Connector:
                     10027: "AutoTrading disabled"
                 }
                 error_msg = error_codes.get(result.retcode, f"Error {result.retcode}")
-                print(f"Close failed with retcode {result.retcode}: {error_msg}", file=sys.stderr)
-                return {"success": False, "error": f"Close failed: {error_msg}"}
+                return False, f"Close failed: {error_msg}"
+            
+            return False, f"Close failed after {max_retries} attempts"
+            
         except Exception as e:
-            print(f"Exception in close_trade: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
 
     def get_positions(self):
         try:
             if not self.connected:
-                return {"success": False, "error": "Not connected"}
+                return False, "Not connected"
+            
             positions = mt5.positions_get() or []
-            print(f"Retrieved {len(positions)} positions from MT5", file=sys.stderr)
-            return {"success": True, "data": [{
-                "ticket": p.ticket, "symbol": p.symbol, "type": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
-                "volume": p.volume, "price_open": p.price_open, "price_current": p.price_current, "profit": p.profit,
-                "comment": p.comment, "magic": p.magic
-            } for p in positions]}
+            return True, [{
+                "ticket": p.ticket,
+                "symbol": p.symbol,
+                "type": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
+                "volume": p.volume,
+                "price_open": p.price_open,
+                "price_current": p.price_current,
+                "profit": p.profit,
+                "comment": p.comment,
+                "magic": p.magic
+            } for p in positions]
         except Exception as e:
-            print(f"Exception in get_positions: {str(e)}", file=sys.stderr)
-            return {"success": False, "error": str(e)}
+            return False, str(e)
 
-    def disconnect(self):
-        self.connected = False
-        mt5.shutdown()
-        print("MT5 disconnected", file=sys.stderr)
-        return {"success": True, "data": "Disconnected"}
+# Global connector instance
+connector = MT5Connector()
 
-def main():
-    connector = MT5Connector()
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            break
-        try:
-            request = json.loads(line.strip())
-            request_id = request.get('requestId')
-            action = request.get('action')
-            result = {
-                'connect': lambda: connector.connect(request['server'], request['login'], request['password']),
-                'get_symbols': lambda: connector.get_symbols(),
-                'get_symbol_info': lambda: connector.get_symbol_info(request['symbol']),
-                'get_price': lambda: connector.get_price(request['symbol']),
-                'place_trade': lambda: connector.place_trade(
-                    request['symbol'], request['volume'], request['type'],
-                    request.get('sl_distance', 10.0), request.get('tp_distance', 10.0),
-                    request.get('comment', ''), request.get('magic', 0)
-                ),
-                'close_trade': lambda: connector.close_trade(
-                    request['ticket'], request['volume'], 
-                    request.get('symbol'), request.get('type')
-                ),
-                'get_positions': lambda: connector.get_positions(),
-                'disconnect': lambda: connector.disconnect()
-            }.get(action, lambda: {"success": False, "error": f"Unknown action {action}"})()
-            result['requestId'] = request_id
-            print(json.dumps(result))
-            sys.stdout.flush()
-        except json.JSONDecodeError:
-            print(json.dumps({"success": False, "error": "Invalid JSON", "requestId": None}))
-            sys.stdout.flush()
-        except Exception as e:
-            print(json.dumps({"success": False, "error": str(e), "requestId": request.get('requestId')}))
-            sys.stdout.flush()
-
-if __name__ == "__main__":
+@app.route('/connect', methods=['POST'])
+def connect():
     try:
-        # Verify MT5 module is properly loaded
-        if not hasattr(mt5, 'initialize'):
-            print("Error: MT5 module does not contain required MT5 functionality", file=sys.stderr)
-            sys.exit(1)
-        main()
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+        
+        server = data.get('server')
+        login = data.get('login')
+        password = data.get('password')
+        
+        if not all([server, login, password]):
+            return jsonify({"success": False, "error": "Missing server, login, or password"}), 400
+        
+        success, result = connector.connect(server, login, password)
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
     except Exception as e:
-        print(f"Failed to start MT5 connector: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/disconnect', methods=['POST'])
+def disconnect():
+    try:
+        success, result = connector.disconnect()
+        return jsonify({"success": success, "message": result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/symbols', methods=['GET'])
+def symbols():
+    try:
+        success, result = connector.get_symbols()
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/symbol/<symbol>', methods=['GET'])
+def symbol_info(symbol):
+    try:
+        success, result = connector.get_symbol_info(symbol)
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/price/<symbol>', methods=['GET'])
+def price(symbol):
+    try:
+        success, result = connector.get_price(symbol)
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/positions', methods=['GET'])
+def positions():
+    try:
+        success, result = connector.get_positions()
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/trade', methods=['POST'])
+def trade():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+        
+        symbol = data.get('symbol')
+        volume = float(data.get('volume', 0.1))
+        order_type = data.get('type')
+        sl_distance = float(data.get('sl_distance', 10.0))
+        tp_distance = float(data.get('tp_distance', 10.0))
+        comment = data.get('comment', '')
+        magic = int(data.get('magic', 0))
+        
+        if not all([symbol, order_type]):
+            return jsonify({"success": False, "error": "Missing symbol or order type"}), 400
+        
+        success, result = connector.place_trade(symbol, volume, order_type, sl_distance, tp_distance, comment, magic)
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/close', methods=['POST'])
+def close():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+        
+        ticket = data.get('ticket')
+        volume = data.get('volume')
+        symbol = data.get('symbol')
+        
+        if not ticket:
+            return jsonify({"success": False, "error": "Missing ticket"}), 400
+        
+        ticket = int(ticket)
+        volume = float(volume) if volume else None
+        
+        success, result = connector.close_trade(ticket, volume, symbol)
+        if success:
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        "success": True,
+        "data": {
+            "status": "running",
+            "connected": connector.connected,
+            "timestamp": datetime.now().isoformat()
+        }
+    })
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)

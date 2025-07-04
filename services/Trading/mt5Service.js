@@ -1,469 +1,163 @@
-import { spawn } from "child_process";
-import path from "path";
-import EventEmitter from "events";
-import fs from "fs";
+import axios from 'axios';
 
-class MT5Service extends EventEmitter {
+const BASE_URL = 'http://localhost:5000'; // Adjust to your Python API URL
+
+class MT5Service {
   constructor() {
-    super();
     this.isConnected = false;
-    this.pythonProcess = null;
     this.priceData = new Map();
     this.lastPriceUpdate = new Map();
-    this.responseCallbacks = new Map();
-    this.requestId = 0;
-    this.availableSymbols = new Set();
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-
-    this.initializePythonBridge();
-    this.setupResponseHandlers();
-  }
-
-  initializePythonBridge() {
-    try {
-      const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
-      const winePythonPath = "/home/ubuntu/.wine/drive_c/Python310/python.exe";
-      
-      // Check if Wine Python exists
-      const wineExists = fs.existsSync(winePythonPath);
-      
-      if (!wineExists) {
-        console.warn("Wine Python not found. Attempting installation or using fallback...");
-        this.initializeFallbackBridge();
-        return;
-      }
-
-      // Use xvfb-run with proper arguments for Wine Python
-      const pythonExecutable = "xvfb-run";
-      const args = [
-        "-a",                                    // Auto-select display
-        "-s", "-screen 0 1024x768x24",          // Screen configuration
-        "wine",                                  // Wine executable
-        winePythonPath,                          // Python path in Wine
-        pythonScriptPath                         // Script path
-      ];
-
-      this.pythonProcess = spawn(pythonExecutable, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: false,
-        env: {
-          ...process.env,
-          DISPLAY: ":99",
-          WINEDEBUG: "-all",  // Suppress Wine debug messages
-          WINEPREFIX: "/home/ubuntu/.wine"
-        }
-      });
-
-      this.pythonProcess.stdout.on("data", (data) => {
-        const output = data.toString();
-        this.handlePythonResponse(output);
-      });
-
-      this.pythonProcess.stderr.on("data", (data) => {
-        const errorOutput = data.toString();
-        // Filter out Wine-specific errors but log others
-        if (!this.isWineError(errorOutput)) {
-          console.error("MT5 Python log:", errorOutput);
-        } else {
-          console.log("Filtered Wine message:", errorOutput.trim());
-        }
-      });
-
-      this.pythonProcess.on("close", (code) => {
-        console.log(`MT5 Python exited with code ${code}`);
-        this.isConnected = false;
-        this.emit("disconnected");
-        
-        // Handle specific error codes
-        if (code === 53 && this.reconnectAttempts < this.maxReconnectAttempts) {
-          console.log(`Attempting to restart MT5 bridge (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`);
-          this.reconnectAttempts++;
-          setTimeout(() => {
-            this.initializePythonBridge();
-          }, 5000);
-        } else if (code === 53) {
-          console.log("Max reconnection attempts reached. Switching to fallback mode.");
-          this.initializeFallbackBridge();
-        }
-      });
-
-      this.pythonProcess.on("error", (error) => {
-        console.error("Python process error:", error);
-        this.initializeFallbackBridge();
-      });
-
-      console.log("MT5 Python bridge initialized with Wine");
-    } catch (error) {
-      console.error("Python bridge initialization failed:", error);
-      this.initializeFallbackBridge();
-    }
-  }
-
-  initializeFallbackBridge() {
-    try {
-      const pythonScriptPath = "/home/ubuntu/crm-live-pro-server/python/mt5_connector.py";
-      
-      console.log("Attempting fallback to native Python...");
-      
-      // Try different Python executables
-      const pythonExecutables = ['python3', 'python', 'python3.10'];
-      
-      for (const pythonExe of pythonExecutables) {
-        try {
-          this.pythonProcess = spawn(pythonExe, [pythonScriptPath], {
-            stdio: ["pipe", "pipe", "pipe"],
-            cwd: "/home/ubuntu/crm-live-pro-server/python",
-            env: {
-              ...process.env,
-              PYTHONPATH: "/home/ubuntu/crm-live-pro-server/python"
-            }
-          });
-
-          this.pythonProcess.stdout.on("data", (data) =>
-            this.handlePythonResponse(data.toString())
-          );
-          
-          this.pythonProcess.stderr.on("data", (data) =>
-            console.error("MT5 Python fallback log:", data.toString())
-          );
-          
-          this.pythonProcess.on("close", (code) => {
-            console.log(`MT5 Python fallback exited with code ${code}`);
-            this.isConnected = false;
-            this.emit("disconnected");
-          });
-
-          this.pythonProcess.on("error", (error) => {
-            console.error(`Fallback ${pythonExe} failed:`, error);
-          });
-
-          console.log(`MT5 Python fallback bridge initialized with ${pythonExe}`);
-          return; // Success, exit the loop
-          
-        } catch (error) {
-          console.log(`Failed to initialize with ${pythonExe}:`, error.message);
-          continue; // Try next executable
-        }
-      }
-      
-      // If all executables failed
-      throw new Error("All Python executables failed");
-      
-    } catch (error) {
-      console.error("Fallback bridge initialization failed:", error);
-      console.log("Running in market data backup mode only");
-      this.isConnected = false;
-    }
-  }
-
-  isWineError(output) {
-    const wineErrorPatterns = [
-      "wine:",
-      "X connection",
-      "c0000135",
-      "Could not resolve keysym",
-      "xkbcomp",
-      "Warning:",
-      "Errors from xkbcomp are not fatal"
-    ];
-    
-    return wineErrorPatterns.some(pattern => 
-      output.toLowerCase().includes(pattern.toLowerCase())
-    );
-  }
-
-  handlePythonResponse(data) {
-    try {
-      const lines = data.trim().split("\n");
-      lines.forEach((line) => {
-        if (line.trim()) {
-          // Skip Wine error messages
-          if (this.isWineError(line)) {
-            console.log("Skipping Wine error:", line.trim());
-            return;
-          }
-          
-          try {
-            const response = JSON.parse(line);
-            if (response.type === "price_update") {
-              this.emit("price_update", response.data);
-            } else if (
-              response.requestId &&
-              this.responseCallbacks.has(response.requestId)
-            ) {
-              const callback = this.responseCallbacks.get(response.requestId);
-              this.responseCallbacks.delete(response.requestId);
-              callback(response);
-            } else if (response.type === "connection_status") {
-              if (response.connected) {
-                this.isConnected = true;
-                this.reconnectAttempts = 0; // Reset counter on successful connection
-                this.emit("connected");
-              } else {
-                this.isConnected = false;
-                this.emit("disconnected");
-              }
-            }
-          } catch (jsonError) {
-            console.warn("Skipping non-JSON line:", line);
-          }
-        }
-      });
-    } catch (error) {
-      console.error("Python response parsing error:", error);
-    }
-  }
-
-  setupResponseHandlers() {
-    this.on("price_update", (data) => {
-      this.priceData.set(data.symbol, {
-        bid: data.bid,
-        ask: data.ask,
-        spread: data.spread,
-        timestamp: new Date(),
-      });
-      this.lastPriceUpdate.set(data.symbol, Date.now());
-    });
-
-    this.on("connected", () => {
-      console.log("MT5 Service connected successfully");
-    });
-
-    this.on("disconnected", () => {
-      console.log("MT5 Service disconnected");
-    });
-  }
-
-  async sendCommand(command, timeout = 30000) {
-    return new Promise((resolve, reject) => {
-      if (!this.pythonProcess) {
-        reject(new Error("Python process not initialized"));
-        return;
-      }
-
-      const requestId = ++this.requestId;
-      const commandWithId = { ...command, requestId };
-
-      this.responseCallbacks.set(requestId, (response) => {
-        console.log("Response received:", JSON.stringify(response, null, 2));
-        if (!response || typeof response !== "object") {
-          this.responseCallbacks.delete(requestId);
-          reject(
-            new Error(
-              "Invalid response from MT5: response is undefined or not an object"
-            )
-          );
-        } else if (response.success) {
-          this.responseCallbacks.delete(requestId);
-          resolve(response.data);
-        } else {
-          this.responseCallbacks.delete(requestId);
-          reject(new Error(response.error || "Unknown error"));
-        }
-      });
-
-      const timeoutId = setTimeout(() => {
-        if (this.responseCallbacks.has(requestId)) {
-          this.responseCallbacks.delete(requestId);
-          reject(new Error("Request timeout"));
-        }
-      }, timeout);
-
-      try {
-        this.pythonProcess.stdin.write(JSON.stringify(commandWithId) + "\n");
-      } catch (error) {
-        clearTimeout(timeoutId);
-        this.responseCallbacks.delete(requestId);
-        reject(new Error(`Failed to send command: ${error.message}`));
-      }
-    });
   }
 
   async connect() {
     try {
-      const result = await this.sendCommand({
-        action: "connect",
+      const response = await axios.post(`${BASE_URL}/connect`, {
         server: process.env.MT5_SERVER,
         login: parseInt(process.env.MT5_LOGIN),
         password: process.env.MT5_PASSWORD,
       });
-      this.isConnected = true;
-      this.emit("connected");
-      await this.loadAvailableSymbols();
-      return result;
+      this.isConnected = response.data.success;
+      return response.data.data;
     } catch (error) {
-      console.error("MT5 connection failed:", error);
+      console.error('MT5 connection failed:', error.message);
       throw error;
     }
   }
 
-  async loadAvailableSymbols() {
+  async disconnect() {
     try {
-      const symbols = await this.sendCommand({ action: "get_symbols" });
-      this.availableSymbols = new Set(symbols);
-      console.log(`Loaded ${symbols.length} symbols`);
-      return symbols;
+      const response = await axios.post(`${BASE_URL}/disconnect`);
+      this.isConnected = false;
+      return response.data.message;
     } catch (error) {
-      console.error("Symbol loading failed:", error);
-      return [];
+      console.error('MT5 disconnect failed:', error.message);
+      throw error;
     }
   }
 
-  async findSymbol(searchTerm) {
-    if (this.availableSymbols.size === 0) await this.loadAvailableSymbols();
-    const searchLower = searchTerm.toLowerCase();
-    return Array.from(this.availableSymbols).filter(
-      (s) =>
-        s.toLowerCase().includes(searchLower) ||
-        s.toLowerCase().includes("xau") ||
-        s.toLowerCase().includes("gold") ||
-        s === "XAUUSD_TTBAR.Fix"
-    );
+  async getSymbols() {
+    try {
+      const response = await axios.get(`${BASE_URL}/symbols`);
+      return response.data.data;
+    } catch (error) {
+      console.error('Symbol fetch failed:', error.message);
+      throw error;
+    }
   }
 
   async getSymbolInfo(symbol) {
     try {
-      return await this.sendCommand({ action: "get_symbol_info", symbol });
+      const response = await axios.get(`${BASE_URL}/symbol/${symbol}`);
+      return response.data.data;
     } catch (error) {
-      console.error("Symbol info fetch failed:", error);
+      console.error('Symbol info fetch failed:', error.message);
       throw error;
     }
   }
 
-  async validateSymbol(symbol) {
-    if (this.availableSymbols.has(symbol)) {
-      const info = await this.getSymbolInfo(symbol);
-      if (info.trade_mode !== 0) return symbol;
-      console.warn(`Symbol ${symbol} not tradable`);
-    }
-    const matches = await this.findSymbol(symbol);
-    for (const match of matches) {
-      const info = await this.getSymbolInfo(match);
-      if (info.trade_mode !== 0) return match;
-    }
-    throw new Error(
-      `Symbol ${symbol} not found or tradable. Alternatives: ${matches.join(
-        ", "
-      )}`
-    );
-  }
-
-  async getPrice(symbol = "XAUUSD_TTBAR.Fix") {
-    const validSymbol = await this.validateSymbol(symbol);
-    const result = await this.sendCommand({
-      action: "get_price",
-      symbol: validSymbol,
-    });
-    this.priceData.set(validSymbol, {
-      bid: result.bid,
-      ask: result.ask,
-      spread: result.spread,
-      timestamp: new Date(),
-    });
-    return { ...result, symbol: validSymbol };
-  }
-
-  async placeTrade(tradeData, retryCount = 0) {
-    const maxRetries = 3;
+  async getPrice(symbol = 'XAUUSD_TTBAR.Fix') {
     try {
-      if (!(await this.testConnection()).success)
-        throw new Error("MT5 connection test failed");
-      const symbol = await this.validateSymbol(
-        tradeData.symbol || "XAUUSD_TTBAR.Fix"
-      );
-      const info = await this.getSymbolInfo(symbol);
-      if (info.trade_mode === 0)
-        throw new Error(`Symbol ${symbol} is not tradable`);
-
-      let volume = parseFloat(tradeData.volume);
-      if (isNaN(volume) || volume < info.volume_min)
-        throw new Error(`Volume ${volume} below minimum ${info.volume_min}`);
-      if (volume > info.volume_max)
-        throw new Error(`Volume ${volume} exceeds maximum ${info.volume_max}`);
-      volume = Math.round(volume / info.volume_step) * info.volume_step;
-
-      const stopLevel = info.stops_level * info.point;
-      let slDistance = parseFloat(tradeData.slDistance) || 10.0;
-      let tpDistance = parseFloat(tradeData.tpDistance) || 10.0;
-      if (slDistance < stopLevel) slDistance = stopLevel;
-      if (tpDistance < stopLevel) tpDistance = stopLevel;
-
-      let comment =
-        tradeData.comment || `Ord-${Date.now().toString().slice(-6)}`;
-      if (comment.length > 26) {
-        comment = comment.slice(0, 26);
-      }
-
-      const request = {
-        action: "place_trade",
-        symbol,
-        volume,
-        type: tradeData.type.toUpperCase(),
-        sl_distance: slDistance,
-        tp_distance: tpDistance,
-        comment: comment,
-        magic: tradeData.magic || 123456,
-      };
-      console.log("Sending trade request:", JSON.stringify(request, null, 2));
-
-      const result = await this.sendCommand(request, 45000);
-      return {
-        success: true,
-        ticket: result.order || result.deal,
-        deal: result.deal,
-        volume: result.volume,
-        price: result.price,
-        symbol,
-        type: tradeData.type,
-        sl: result.sl,
-        tp: result.tp,
-        comment: result.comment,
-        retcode: result.retcode,
-      };
+      const response = await axios.get(`${BASE_URL}/price/${symbol}`);
+      const priceData = response.data.data;
+      this.priceData.set(symbol, {
+        bid: priceData.bid,
+        ask: priceData.ask,
+        spread: priceData.spread,
+        timestamp: new Date(priceData.time),
+      });
+      this.lastPriceUpdate.set(symbol, Date.now());
+      return priceData;
     } catch (error) {
-      const errorCode = error.message.match(/Code: (\d+)/)?.[1];
-      const errorMessage = errorCode
-        ? {
-            10018: "Market closed",
-            10019: "Insufficient funds",
-            10020: "Prices changed",
-            10021: "Invalid request (check volume, symbol, or market status)",
-            10022: "Invalid SL/TP",
-            10017: "Invalid parameters",
-            10027: "AutoTrading disabled",
-          }[parseInt(errorCode)] || "Unknown error"
-        : error.message.includes("connection")
-        ? "MT5 connection issue"
-        : error.message;
-      if (
-        (errorCode === "10020" || errorCode === "10021") &&
-        retryCount < maxRetries
-      ) {
-        console.log(
-          `Retrying trade (${
-            retryCount + 1
-          }/${maxRetries}) for error: ${errorMessage}`
-        );
-        await new Promise((r) => setTimeout(r, 1000));
-        return this.placeTrade(
-          { ...tradeData, deviation: (tradeData.deviation || 20) + 10 },
-          retryCount + 1
-        );
-      }
-      console.error("Trade placement failed:", error);
-      throw new Error(errorMessage);
-    }
-  }
-
-  async getPositions() {
-    try {
-      return await this.sendCommand({ action: "get_positions" });
-    } catch (error) {
-      console.error("Positions fetch failed:", error);
+      console.error(`Price fetch failed for ${symbol}:`, error.message);
       throw error;
     }
   }
+
+async placeTrade(tradeData, retryCount = 0) {
+  const maxRetries = 3;
+  try {
+    if (!(await this.testConnection()).success) {
+      throw new Error("MT5 connection test failed");
+    }
+    const symbol = await this.validateSymbol(tradeData.symbol || "XAUUSD_TTBAR.Fix");
+    const info = await this.getSymbolInfo(symbol);
+    if (info.trade_mode === 0) {
+      throw new Error(`Symbol ${symbol} is not tradable`);
+    }
+
+    let volume = parseFloat(tradeData.volume);
+    if (isNaN(volume) || volume < info.volume_min) {
+      throw new Error(`Volume ${volume} below minimum ${info.volume_min}`);
+    }
+    if (volume > info.volume_max) {
+      throw new Error(`Volume ${volume} exceeds maximum ${info.volume_max}`);
+    }
+    volume = Math.round(volume / info.volume_step) * info.volume_step;
+
+    const stopLevel = info.stops_level * info.point;
+    let slDistance = parseFloat(tradeData.slDistance) || 10.0;
+    let tpDistance = parseFloat(tradeData.tpDistance) || 10.0;
+    if (slDistance < stopLevel) slDistance = stopLevel;
+    if (tpDistance < stopLevel) tpDistance = stopLevel;
+
+    let comment = tradeData.comment || `Ord-${Date.now().toString().slice(-6)}`;
+    if (comment.length > 26) {
+      comment = comment.slice(0, 26);
+    }
+
+    const request = {
+      symbol,
+      volume,
+      type: tradeData.type.toUpperCase(),
+      sl_distance: slDistance,
+      tp_distance: tpDistance,
+      comment,
+      magic: tradeData.magic || 123456,
+    };
+    console.log("Sending trade request:", JSON.stringify(request, null, 2));
+
+    const response = await axios.post(`${BASE_URL}/trade`, request);
+    console.log("API response:", JSON.stringify(response.data, null, 2)); // Debug log
+    const result = response.data.data; // Contains trade details
+    if (!response.data.success) throw new Error(result.error || "MT5 trade failed");
+
+    return {
+      success: true,
+      ticket: result.order || result.deal,
+      deal: result.deal,
+      volume: result.volume,
+      price: result.price,
+      symbol,
+      type: tradeData.type,
+      sl: result.sl,
+      tp: result.tp,
+      comment: result.comment,
+      retcode: result.retcode,
+    };
+  } catch (error) {
+    const errorCode = error.response?.data?.error?.match(/Code: (\d+)/)?.[1];
+    const errorMessage = errorCode
+      ? {
+          10018: "Market closed",
+          10019: "Insufficient funds",
+          10020: "Prices changed",
+          10021: "Invalid request (check volume, symbol, or market status)",
+          10022: "Invalid SL/TP",
+          10017: "Invalid parameters",
+          10027: "AutoTrading disabled",
+        }[parseInt(errorCode)] || "Unknown error"
+      : error.message.includes("connection")
+      ? "MT5 connection issue"
+      : error.message;
+    if ((errorCode === "10020" || errorCode === "10021") && retryCount < maxRetries) {
+      console.log(`Retrying trade (${retryCount + 1}/${maxRetries}) for error: ${errorMessage}`);
+      await new Promise((r) => setTimeout(r, 1000));
+      return this.placeTrade({ ...tradeData, deviation: (tradeData.deviation || 20) + 10 }, retryCount + 1);
+    }
+    console.error("Trade placement failed:", error);
+    throw new Error(errorMessage);
+  }
+}
 
   async closeTrade(tradeData, retryCount = 0) {
     const maxRetries = 3;
@@ -488,18 +182,16 @@ class MT5Service extends EventEmitter {
       }
       const position = positions.find((p) => p.ticket === parseInt(tradeData.ticket));
       
-      // If position not found, try closing via MT5 to confirm status
       if (!position) {
         console.warn(`Position not found in initial check for ticket ${tradeData.ticket}. Attempting MT5 closure.`);
         const request = {
-          action: "close_trade",
           ticket: parseInt(tradeData.ticket),
           symbol: validSymbol,
           volume: parseFloat(tradeData.volume),
           type: tradeData.type.toUpperCase(),
         };
-        const result = await this.sendCommand(request, 45000);
-        console.log(`MT5 response: ${JSON.stringify(result, null, 2)}`);
+        const response = await axios.post(`${BASE_URL}/close`, request);
+        const result = response.data.data;
 
         if (!result || typeof result !== "object") {
           throw new Error("Invalid response from MT5: result is undefined or not an object");
@@ -544,7 +236,6 @@ class MT5Service extends EventEmitter {
         throw new Error(`Invalid position volume: ${volume} for ticket: ${tradeData.ticket}`);
       }
 
-      // Validate volume against symbol info
       if (volume < info.volume_min) {
         throw new Error(`Volume ${volume} is below minimum ${info.volume_min} for ${validSymbol}`);
       }
@@ -566,15 +257,15 @@ class MT5Service extends EventEmitter {
         : position.profit || 0;
 
       const request = {
-        action: "close_trade",
         ticket: parseInt(tradeData.ticket),
         symbol: validSymbol,
-        volume: volume, // Use position volume
+        volume: volume,
         type: tradeData.type.toUpperCase(),
       };
       console.log(`Sending close trade request: ${JSON.stringify(request, null, 2)} with price ${closePrice}`);
 
-      const result = await this.sendCommand(request, 45000);
+      const response = await axios.post(`${BASE_URL}/close`, request);
+      const result = response.data.data;
       if (!result || typeof result !== "object") {
         throw new Error("Invalid response from MT5: result is undefined or not an object");
       }
@@ -622,7 +313,7 @@ class MT5Service extends EventEmitter {
       }
       throw new Error(errorMsg);
     } catch (error) {
-      const errorCode = error.message.match(/Retcode: (\d+)/)?.[1] || error.message.match(/-?\d+/)?.[0];
+      const errorCode = error.response?.data?.error?.match(/Retcode: (\d+)/)?.[1] || error.response?.data?.error?.match(/-?\d+/)?.[0];
       const errorMessage = errorCode
         ? {
             10013: "Requote detected",
@@ -651,26 +342,44 @@ class MT5Service extends EventEmitter {
     }
   }
 
-  getCachedPrice(symbol = "XAUUSD_TTBAR.Fix") {
+  async getPositions() {
+    try {
+      const response = await axios.get(`${BASE_URL}/positions`);
+      return response.data.data;
+    } catch (error) {
+      console.error('Positions fetch failed:', error.message);
+      throw error;
+    }
+  }
+
+  getCachedPrice(symbol = 'XAUUSD_TTBAR.Fix') {
     return this.priceData.get(symbol);
   }
 
-  isPriceFresh(symbol = "XAUUSD_TTBAR.Fix", maxAge = 5000) {
-    return (
-      this.lastPriceUpdate.get(symbol) &&
-      Date.now() - this.lastPriceUpdate.get(symbol) < maxAge
-    );
+  isPriceFresh(symbol = 'XAUUSD_TTBAR.Fix', maxAge = 5000) {
+    return this.lastPriceUpdate.get(symbol) && Date.now() - this.lastPriceUpdate.get(symbol) < maxAge;
   }
 
-  async listAllSymbols() {
-    try {
-      const symbols = await this.loadAvailableSymbols();
-      console.log("Available symbols:", symbols);
-      return symbols;
-    } catch (error) {
-      console.error("Symbol listing failed:", error);
-      return [];
+  async validateSymbol(symbol) {
+    const symbols = await this.getSymbols();
+    if (symbols.includes(symbol)) {
+      const info = await this.getSymbolInfo(symbol);
+      if (info.trade_mode !== 0) return symbol;
+      console.warn(`Symbol ${symbol} not tradable`);
     }
+    const matches = symbols.filter((s) =>
+      s.toLowerCase().includes(symbol.toLowerCase()) ||
+      s.toLowerCase().includes("xau") ||
+      s.toLowerCase().includes("gold") ||
+      s === "XAUUSD_TTBAR.Fix"
+    );
+    for (const match of matches) {
+      const info = await this.getSymbolInfo(match);
+      if (info.trade_mode !== 0) return match;
+    }
+    throw new Error(
+      `Symbol ${symbol} not found or tradable. Alternatives: ${matches.join(", ")}`
+    );
   }
 
   async testConnection() {
@@ -687,31 +396,6 @@ class MT5Service extends EventEmitter {
         error: error.message,
       };
     }
-  }
-
-  // Health check method
-  getServiceStatus() {
-    return {
-      isConnected: this.isConnected,
-      processRunning: this.pythonProcess !== null,
-      reconnectAttempts: this.reconnectAttempts,
-      availableSymbols: this.availableSymbols.size,
-      cachedPrices: this.priceData.size
-    };
-  }
-
-  async disconnect() {
-    if (this.pythonProcess) {
-      try {
-        await this.sendCommand({ action: "disconnect" });
-      } catch (error) {
-        console.error("Disconnect error:", error);
-      }
-      this.pythonProcess.kill();
-      this.pythonProcess = null;
-    }
-    this.isConnected = false;
-    this.reconnectAttempts = 0;
   }
 }
 
